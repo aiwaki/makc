@@ -1,31 +1,39 @@
 package main
 
 import (
-	"github.com/NeuralTeam/makc"
-	"github.com/NeuralTeam/makc/pkg/types"
-	"github.com/NeuralTeam/makc/pkg/types/keys"
+	"context"
 	"log"
-	"time"
+
+	"github.com/NeuralTeam/makc"
 )
 
 func main() {
-	log.Println("waiting for keyboard key...")
-	log.Printf("pressed key: %v", makc.Keyboard.GetFirstKey())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	for range time.Tick(time.Millisecond) {
-		for _, e := range keys.Keys {
-			_ = makc.Keyboard.GetKeyState(e)
-			//log.Printf("state: %v", s)
-		}
-		makc.Keyboard.KeysRange(func(k keys.Key, v types.State) bool {
-			if !v.Bool() {
-				return true
-			}
-			log.Printf(
-				"%v: %v",
-				k, v,
-			)
-			return true
-		})
+	client, err := makc.Open()
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer client.Close()
+
+	log.Printf("keyboard injection backend: %s", client.Keyboard.InjectionBackend())
+	log.Printf("input tag: 0x%X", client.InputTag())
+
+	key, err := makc.ParseKey("shift")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := client.Keyboard.Tap(ctx, key); err != nil {
+		log.Fatal(err)
+	}
+	if err := client.Keyboard.ScanTap(ctx, 0x2A, false); err != nil {
+		log.Fatal(err)
+	}
+
+	down, err := client.Keyboard.Down(ctx, makc.KeyA)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("%s down=%v", makc.KeyA, down)
 }

@@ -1,39 +1,65 @@
 package main
 
 import (
-	"github.com/NeuralTeam/makc"
-	"github.com/NeuralTeam/makc/pkg/types"
-	"github.com/NeuralTeam/makc/pkg/types/buttons"
+	"context"
 	"log"
 	"time"
+
+	"github.com/NeuralTeam/makc"
 )
 
 func main() {
-	log.Println("waiting for mouse button...")
-	firstButton := makc.Mouse.GetFirstButton()
-	log.Printf("pressed button: %v", firstButton)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 
-	for range time.Tick(time.Millisecond) {
-		for _, e := range buttons.Buttons {
-			_ = makc.Mouse.GetButtonState(e)
-			//log.Printf("state: %v", s)
-		}
-		makc.Mouse.ButtonsRange(func(k buttons.Button, v types.State) bool {
-			if !v.Bool() {
-				return true
-			}
-			log.Printf(
-				"%v: %v",
-				k, v,
-			)
-			if k == firstButton {
-				makc.Mouse.Move(
-					types.Point{X: 10, Y: 10},
-					true, false,
-				)
-				log.Printf("pointer: %v", makc.Mouse.GetPointer())
-			}
-			return true
-		})
+	client, err := makc.Open(makc.WithMouseInjection(makc.MouseInjectionAuto))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	log.Printf("mouse injection backend: %s", client.Mouse.InjectionBackend())
+	log.Printf("input tag: 0x%X", client.InputTag())
+
+	start, err := client.Mouse.Position(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	screen, err := client.Mouse.ScreenSize(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("screen=%dx%d position=%d,%d", screen.X, screen.Y, start.X, start.Y)
+
+	listener, err := client.Listen(ctx, makc.ListenOptions{
+		Mask:            makc.ListenMouse,
+		Buffer:          8,
+		IncludeInjected: true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer listener.Close()
+
+	if err := client.Mouse.Inject(ctx,
+		makc.MouseMoveEvent(makc.Rel(10, 10)),
+		makc.MousePauseEvent(50*time.Millisecond),
+		makc.MouseMoveEvent(makc.Abs(start.X, start.Y)),
+	); err != nil {
+		log.Fatal(err)
+	}
+
+	select {
+	case event := <-listener.Events:
+		log.Printf("mouse event kind=%d injected=%v own=%v extra=0x%X pos=%d,%d",
+			event.Kind,
+			event.Injected,
+			event.Own,
+			event.ExtraInfo,
+			event.Mouse.Position.X,
+			event.Mouse.Position.Y,
+		)
+	case <-ctx.Done():
+		log.Fatal(ctx.Err())
 	}
 }
