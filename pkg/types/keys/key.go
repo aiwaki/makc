@@ -1,10 +1,10 @@
 // Package keys keeps compatibility aliases for the pre-v2 API.
 //
-// Deprecated: import github.com/NeuralTeam/makc and use makc.Key constants
+// Deprecated: import github.com/aiwaki/makc and use makc.Key constants
 // directly.
 package keys
 
-import "github.com/NeuralTeam/makc"
+import "github.com/aiwaki/makc"
 
 // Key is an alias for makc.Key.
 //

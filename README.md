@@ -18,7 +18,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/NeuralTeam/makc"
+	"github.com/aiwaki/makc"
 )
 
 func main() {
@@ -98,7 +98,7 @@ from the active codebase.
 
 The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
 kept as deprecated compatibility aliases. New code should import the root
-`github.com/NeuralTeam/makc` package directly.
+`github.com/aiwaki/makc` package directly.
 
 ## Smoke Test
 

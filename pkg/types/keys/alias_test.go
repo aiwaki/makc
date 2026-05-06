@@ -3,7 +3,7 @@ package keys
 import (
 	"testing"
 
-	"github.com/NeuralTeam/makc"
+	"github.com/aiwaki/makc"
 )
 
 func TestLegacyKeyAliases(t *testing.T) {

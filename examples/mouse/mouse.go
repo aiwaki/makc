@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/NeuralTeam/makc"
+	"github.com/aiwaki/makc"
 )
 
 func main() {

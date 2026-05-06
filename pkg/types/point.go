@@ -1,6 +1,6 @@
 package types
 
-import "github.com/NeuralTeam/makc"
+import "github.com/aiwaki/makc"
 
 // Point is an alias for makc.Point.
 //

@@ -1,10 +1,10 @@
 // Package types keeps compatibility aliases for the pre-v2 API.
 //
-// Deprecated: import github.com/NeuralTeam/makc and use makc.State,
+// Deprecated: import github.com/aiwaki/makc and use makc.State,
 // makc.Point, and related root-package types directly.
 package types
 
-import "github.com/NeuralTeam/makc"
+import "github.com/aiwaki/makc"
 
 // State is an alias for makc.State.
 //
