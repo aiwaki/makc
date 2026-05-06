@@ -1,39 +1,34 @@
+// Package buttons keeps compatibility aliases for the pre-v2 API.
+//
+// Deprecated: import github.com/NeuralTeam/makc and use makc.MouseButton
+// constants directly.
 package buttons
 
-import (
-	"github.com/NeuralTeam/makc/internal/makc"
-)
+import "github.com/NeuralTeam/makc"
+
+// Button is an alias for makc.MouseButton.
+//
+// Deprecated: use makc.MouseButton.
+type Button = makc.MouseButton
 
 const (
-	leftbutton   = makc.LeftButton
-	rightbutton  = makc.RightButton
-	middlebutton = makc.MiddleButton
-	sidebutton   = makc.SideButton
+	// Deprecated: use makc.ButtonLeft.
+	Left = makc.ButtonLeft
+	// Deprecated: use makc.ButtonRight.
+	Right = makc.ButtonRight
+	// Deprecated: use makc.ButtonMiddle.
+	Middle = makc.ButtonMiddle
+	// Deprecated: use makc.ButtonSide or makc.ButtonX1.
+	Side = makc.ButtonSide
 )
 
-type Button int
-
-const (
-	Left Button = iota
-	Right
-	Middle
-	Side
-)
-
-var (
-	Buttons = []Button{
-		Left,
-		Right,
-		Middle,
-		Side,
-	}
-)
-
-func (s Button) String() string {
-	return [...]string{
-		leftbutton,
-		rightbutton,
-		middlebutton,
-		sidebutton,
-	}[s]
+// Buttons contains the legacy button set.
+//
+// Deprecated: use makc.ButtonLeft, makc.ButtonRight, makc.ButtonMiddle,
+// makc.ButtonX1, and makc.ButtonX2 directly.
+var Buttons = []Button{
+	Left,
+	Right,
+	Middle,
+	Side,
 }

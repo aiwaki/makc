@@ -1,34 +1,27 @@
+// Package types keeps compatibility aliases for the pre-v2 API.
+//
+// Deprecated: import github.com/NeuralTeam/makc and use makc.State,
+// makc.Point, and related root-package types directly.
 package types
 
+import "github.com/NeuralTeam/makc"
+
+// State is an alias for makc.State.
+//
+// Deprecated: use makc.State.
+type State = makc.State
+
 const (
-	up   = `up`
-	down = `down`
+	// Deprecated: use makc.Up.
+	Up = makc.Up
+	// Deprecated: use makc.Down.
+	Down = makc.Down
 )
 
-type State int
-
-const (
-	Up State = iota
-	Down
-)
-
-var (
-	States = []State{
-		Up,
-		Down,
-	}
-)
-
-func (s State) String() string {
-	return [...]string{
-		up,
-		down,
-	}[s]
-}
-
-func (s State) Bool() bool {
-	return [...]bool{
-		false,
-		true,
-	}[s]
+// States contains all known state values.
+//
+// Deprecated: use makc.Up and makc.Down directly.
+var States = []State{
+	Up,
+	Down,
 }
