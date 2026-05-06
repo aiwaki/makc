@@ -1,10 +1,10 @@
 // Package buttons keeps compatibility aliases for the pre-v2 API.
 //
-// Deprecated: import github.com/NeuralTeam/makc and use makc.MouseButton
+// Deprecated: import github.com/aiwaki/makc and use makc.MouseButton
 // constants directly.
 package buttons
 
-import "github.com/NeuralTeam/makc"
+import "github.com/aiwaki/makc"
 
 // Button is an alias for makc.MouseButton.
 //

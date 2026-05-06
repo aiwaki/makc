@@ -1,4 +1,4 @@
-module github.com/NeuralTeam/makc
+module github.com/aiwaki/makc
 
 go 1.25.0
 

@@ -3,7 +3,7 @@ package types
 import (
 	"testing"
 
-	"github.com/NeuralTeam/makc"
+	"github.com/aiwaki/makc"
 )
 
 func TestLegacyTypeAliases(t *testing.T) {

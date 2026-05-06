@@ -3,7 +3,7 @@ package buttons
 import (
 	"testing"
 
-	"github.com/NeuralTeam/makc"
+	"github.com/aiwaki/makc"
 )
 
 func TestLegacyButtonAliases(t *testing.T) {
