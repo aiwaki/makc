@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - "codex/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          files="$(gofmt -l $(find . -name '*.go' -not -path './.git/*' -not -path './dist/*' | sort))"
+          if [ -n "$files" ]; then
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Windows ARM64 compile tests
+        run: GOOS=windows GOARCH=arm64 go test -exec=true ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Windows ARM64 vet
+        run: GOOS=windows GOARCH=arm64 go vet ./...
