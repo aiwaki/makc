@@ -11,19 +11,20 @@ import (
 
 var (
 	// ErrUnsupported is returned when the selected backend cannot run on the
-	// current operating system or Windows build.
+	// current operating system or platform build.
 	ErrUnsupported = errors.New("makc: unsupported backend")
 
 	// ErrClosed is returned after Client.Close has been called.
 	ErrClosed = errors.New("makc: client is closed")
 )
 
-// MouseInjectionBackend selects the Windows mouse input injection primitive.
+// MouseInjectionBackend selects the mouse input injection primitive.
 type MouseInjectionBackend uint8
 
 const (
-	// MouseInjectionAuto prefers InjectMouseInput when user32 exports it and
-	// falls back to SendInput otherwise.
+	// MouseInjectionAuto selects the preferred backend for the current platform.
+	// On Windows this prefers InjectMouseInput when user32 exports it and falls
+	// back to SendInput otherwise. On macOS this selects CGEvent.
 	MouseInjectionAuto MouseInjectionBackend = iota
 
 	// MouseInjectionSendInput uses the documented Win32 SendInput API.
@@ -33,6 +34,9 @@ const (
 	// symbol is present. This backend is intentionally isolated because the
 	// symbol is not available on every Windows build.
 	MouseInjectionInjectMouseInput
+
+	// MouseInjectionCGEvent uses CoreGraphics CGEvent APIs on macOS.
+	MouseInjectionCGEvent
 )
 
 func (b MouseInjectionBackend) String() string {
@@ -43,18 +47,20 @@ func (b MouseInjectionBackend) String() string {
 		return "sendinput"
 	case MouseInjectionInjectMouseInput:
 		return "injectmouseinput"
+	case MouseInjectionCGEvent:
+		return "cgevent"
 	default:
 		return "unknown"
 	}
 }
 
-// KeyboardInjectionBackend selects the Windows keyboard input injection
-// primitive.
+// KeyboardInjectionBackend selects the keyboard input injection primitive.
 type KeyboardInjectionBackend uint8
 
 const (
-	// KeyboardInjectionAuto prefers InjectKeyboardInput when user32 exports it
-	// and falls back to SendInput otherwise.
+	// KeyboardInjectionAuto selects the preferred backend for the current
+	// platform. On Windows this prefers InjectKeyboardInput when user32 exports
+	// it and falls back to SendInput otherwise. On macOS this selects CGEvent.
 	KeyboardInjectionAuto KeyboardInjectionBackend = iota
 
 	// KeyboardInjectionSendInput uses the documented Win32 SendInput API.
@@ -64,6 +70,9 @@ const (
 	// the symbol is present. This backend is intentionally isolated because the
 	// symbol is not available on every Windows build.
 	KeyboardInjectionInjectKeyboardInput
+
+	// KeyboardInjectionCGEvent uses CoreGraphics CGEvent APIs on macOS.
+	KeyboardInjectionCGEvent
 )
 
 func (b KeyboardInjectionBackend) String() string {
@@ -74,6 +83,8 @@ func (b KeyboardInjectionBackend) String() string {
 		return "sendinput"
 	case KeyboardInjectionInjectKeyboardInput:
 		return "injectkeyboardinput"
+	case KeyboardInjectionCGEvent:
+		return "cgevent"
 	default:
 		return "unknown"
 	}
@@ -89,22 +100,22 @@ type config struct {
 type Option func(*config)
 
 // WithMouseInjection selects the backend used by Mouse movement and button
-// injection on Windows.
+// injection.
 func WithMouseInjection(backend MouseInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.mouseInjection = backend
 	}
 }
 
-// WithKeyboardInjection selects the backend used by Keyboard injection on
-// Windows.
+// WithKeyboardInjection selects the backend used by Keyboard injection.
 func WithKeyboardInjection(backend KeyboardInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.keyboardInjection = backend
 	}
 }
 
-// WithInputTag sets the Win32 dwExtraInfo value used on injected inputs.
+// WithInputTag sets the backend tag used on injected inputs where supported.
+// On Windows SendInput this maps to dwExtraInfo.
 //
 // The default is a non-zero per-client tag. Passing 0 disables tagging and
 // own-event detection.
@@ -149,8 +160,9 @@ func Open(opts ...Option) (*Client, error) {
 	return c, nil
 }
 
-// InputTag returns the Win32 dwExtraInfo tag used by this client for injected
-// inputs. A zero tag means input tagging is disabled.
+// InputTag returns the backend tag used by this client for injected inputs when
+// the current platform supports tagging. A zero tag means input tagging is
+// disabled or unavailable.
 func (c *Client) InputTag() uintptr {
 	if c == nil || c.backend == nil {
 		return 0
