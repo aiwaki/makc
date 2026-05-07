@@ -24,7 +24,8 @@ type MouseInjectionBackend uint8
 const (
 	// MouseInjectionAuto selects the preferred backend for the current platform.
 	// On Windows this prefers InjectMouseInput when user32 exports it and falls
-	// back to SendInput otherwise. On macOS this selects CGEvent.
+	// back to SendInput otherwise. On macOS this selects CGEvent. On Linux this
+	// selects uinput.
 	MouseInjectionAuto MouseInjectionBackend = iota
 
 	// MouseInjectionSendInput uses the documented Win32 SendInput API.
@@ -37,6 +38,9 @@ const (
 
 	// MouseInjectionCGEvent uses CoreGraphics CGEvent APIs on macOS.
 	MouseInjectionCGEvent
+
+	// MouseInjectionUInput uses the Linux uinput kernel interface.
+	MouseInjectionUInput
 )
 
 func (b MouseInjectionBackend) String() string {
@@ -49,6 +53,8 @@ func (b MouseInjectionBackend) String() string {
 		return "injectmouseinput"
 	case MouseInjectionCGEvent:
 		return "cgevent"
+	case MouseInjectionUInput:
+		return "uinput"
 	default:
 		return "unknown"
 	}
@@ -61,6 +67,7 @@ const (
 	// KeyboardInjectionAuto selects the preferred backend for the current
 	// platform. On Windows this prefers InjectKeyboardInput when user32 exports
 	// it and falls back to SendInput otherwise. On macOS this selects CGEvent.
+	// On Linux this selects uinput.
 	KeyboardInjectionAuto KeyboardInjectionBackend = iota
 
 	// KeyboardInjectionSendInput uses the documented Win32 SendInput API.
@@ -73,6 +80,9 @@ const (
 
 	// KeyboardInjectionCGEvent uses CoreGraphics CGEvent APIs on macOS.
 	KeyboardInjectionCGEvent
+
+	// KeyboardInjectionUInput uses the Linux uinput kernel interface.
+	KeyboardInjectionUInput
 )
 
 func (b KeyboardInjectionBackend) String() string {
@@ -85,6 +95,8 @@ func (b KeyboardInjectionBackend) String() string {
 		return "injectkeyboardinput"
 	case KeyboardInjectionCGEvent:
 		return "cgevent"
+	case KeyboardInjectionUInput:
+		return "uinput"
 	default:
 		return "unknown"
 	}

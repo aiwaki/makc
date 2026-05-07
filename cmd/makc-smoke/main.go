@@ -43,8 +43,8 @@ func main() {
 	var dy int
 	var wait time.Duration
 
-	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput, cgevent")
-	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput, cgevent")
+	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput, cgevent, uinput")
+	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput, cgevent, uinput")
 	flag.StringVar(&inputTagName, "input-tag", "", "backend tag for injected inputs where supported; empty uses the per-client default, 0 disables tagging")
 	flag.StringVar(&listenBackendName, "listen-backend", "auto", "listener backend: auto, hook, rawinput")
 	flag.StringVar(&buttonName, "button", "left", "mouse button: left, right, middle, x1, x2")
@@ -112,31 +112,23 @@ func main() {
 	}
 	defer client.Close()
 
-	pos, err := client.Mouse.Position(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	screen, err := client.Mouse.ScreenSize(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-	left, err := client.Mouse.Down(ctx, makc.ButtonLeft)
-	if err != nil {
-		log.Fatal(err)
-	}
-	a, err := client.Keyboard.Down(ctx, makc.KeyA)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	fmt.Printf("runtime=%s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("mouse_injection=%s\n", client.Mouse.InjectionBackend())
 	fmt.Printf("keyboard_injection=%s\n", client.Keyboard.InjectionBackend())
 	fmt.Printf("input_tag=0x%X\n", client.InputTag())
-	fmt.Printf("screen=%d,%d\n", screen.X, screen.Y)
-	fmt.Printf("position=%d,%d\n", pos.X, pos.Y)
-	fmt.Printf("left_button_down=%v\n", left)
-	fmt.Printf("key_a_down=%v\n", a)
+
+	pos, hasPos := readPoint("position", func() (makc.Point, error) {
+		return client.Mouse.Position(ctx)
+	})
+	readPoint("screen", func() (makc.Point, error) {
+		return client.Mouse.ScreenSize(ctx)
+	})
+	readBool("left_button_down", func() (bool, error) {
+		return client.Mouse.Down(ctx, makc.ButtonLeft)
+	})
+	readBool("key_a_down", func() (bool, error) {
+		return client.Keyboard.Down(ctx, makc.KeyA)
+	})
 
 	if listen {
 		if err := runListenSmoke(ctx, client, listenBackend, listenCount, includeInjected, normalizeOwnInjected); err != nil {
@@ -191,6 +183,9 @@ func main() {
 		fmt.Printf("hwheel=%d\n", hwheel)
 	}
 	if drag {
+		if !hasPos {
+			log.Fatal("drag requires readable cursor position")
+		}
 		before := pos
 		if err := client.Mouse.DragBy(ctx, button, dx, dy, profile); err != nil {
 			log.Fatal(err)
@@ -210,7 +205,6 @@ func main() {
 		return
 	}
 
-	before := pos
 	move := makc.Rel(dx, dy)
 	if absolute {
 		move = makc.Abs(dx, dy)
@@ -221,12 +215,12 @@ func main() {
 	fmt.Printf("moved=%d,%d absolute=%v\n", dx, dy, absolute)
 	time.Sleep(wait)
 
-	pos, err = client.Mouse.Position(ctx)
-	if err != nil {
-		log.Fatal(err)
+	posAfter, hasPosAfter := readPoint("position_after", func() (makc.Point, error) {
+		return client.Mouse.Position(ctx)
+	})
+	if hasPos && hasPosAfter {
+		fmt.Printf("move_verified=%v\n", posAfter != pos)
 	}
-	fmt.Printf("position_after=%d,%d\n", pos.X, pos.Y)
-	fmt.Printf("move_verified=%v\n", pos != before)
 
 	if click {
 		if err := client.Mouse.Click(ctx, button); err != nil {
@@ -234,6 +228,26 @@ func main() {
 		}
 		fmt.Printf("clicked=%s\n", button)
 	}
+}
+
+func readPoint(name string, read func() (makc.Point, error)) (makc.Point, bool) {
+	point, err := read()
+	if err != nil {
+		fmt.Printf("%s_error=%v\n", name, err)
+		return makc.Point{}, false
+	}
+	fmt.Printf("%s=%d,%d\n", name, point.X, point.Y)
+	return point, true
+}
+
+func readBool(name string, read func() (bool, error)) bool {
+	value, err := read()
+	if err != nil {
+		fmt.Printf("%s_error=%v\n", name, err)
+		return false
+	}
+	fmt.Printf("%s=%v\n", name, value)
+	return true
 }
 
 func runListenSmoke(ctx context.Context, client *makc.Client, backend makc.ListenBackend, count int, includeInjected bool, normalizeOwnInjected bool) error {
@@ -377,6 +391,8 @@ func parseBackend(name string) (makc.MouseInjectionBackend, error) {
 		return makc.MouseInjectionInjectMouseInput, nil
 	case "cgevent", "quartz":
 		return makc.MouseInjectionCGEvent, nil
+	case "uinput":
+		return makc.MouseInjectionUInput, nil
 	default:
 		return makc.MouseInjectionAuto, fmt.Errorf("unknown backend %q", name)
 	}
@@ -392,6 +408,8 @@ func parseKeyboardBackend(name string) (makc.KeyboardInjectionBackend, error) {
 		return makc.KeyboardInjectionInjectKeyboardInput, nil
 	case "cgevent", "quartz":
 		return makc.KeyboardInjectionCGEvent, nil
+	case "uinput":
+		return makc.KeyboardInjectionUInput, nil
 	default:
 		return makc.KeyboardInjectionAuto, fmt.Errorf("unknown keyboard backend %q", name)
 	}

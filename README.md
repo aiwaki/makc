@@ -1,6 +1,7 @@
 # makc
 
-`makc` is a no-cgo mouse and keyboard control package for Windows and macOS.
+`makc` is a no-cgo mouse and keyboard control package for Windows, macOS, and
+Linux.
 It is pronounced `mak-see`, like `Maksim` without the final `m`. The name is
 also a compact acronym for **Mouse And Keyboard Control**.
 
@@ -9,10 +10,12 @@ with a pure Go backend built on:
 
 - [`github.com/ebitengine/purego`](https://github.com/ebitengine/purego)
 - [`golang.org/x/sys/windows`](https://pkg.go.dev/golang.org/x/sys/windows)
+- [`golang.org/x/sys/unix`](https://pkg.go.dev/golang.org/x/sys/unix)
 
 Windows uses Win32 `SendInput` or `Inject*Input` backends. macOS uses
 CoreGraphics `CGEvent` through ApplicationServices and requires Accessibility
-permission for event injection.
+permission for event injection. Linux uses `/dev/uinput` for virtual-device
+injection and requires permission to open the uinput device.
 
 ## Example
 
@@ -72,8 +75,9 @@ func main() {
 
 `MouseInjectionAuto` prefers `user32!InjectMouseInput` on Windows when Windows
 exports the symbol and falls back to `SendInput` otherwise. On macOS it selects
-the CoreGraphics `CGEvent` backend. `KeyboardInjectionAuto` follows the same
-platform split. You can explicitly request backends:
+the CoreGraphics `CGEvent` backend. On Linux it selects the kernel `uinput`
+backend. `KeyboardInjectionAuto` follows the same platform split. You can
+explicitly request backends:
 
 ```go
 client, err := makc.Open(
@@ -90,6 +94,21 @@ client, err := makc.Open(
 	makc.WithKeyboardInjection(makc.KeyboardInjectionCGEvent),
 )
 ```
+
+On Linux:
+
+```go
+client, err := makc.Open(
+	makc.WithMouseInjection(makc.MouseInjectionUInput),
+	makc.WithKeyboardInjection(makc.KeyboardInjectionUInput),
+)
+```
+
+The Linux `uinput` backend is injection-focused: it supports relative mouse
+movement, mouse buttons, wheel events, mapped key events, and raw Linux key-code
+scan events. Cursor position, screen size, input state, absolute movement,
+Unicode text injection, and input listening need a separate display-server or
+evdev layer and currently return `ErrUnsupported`.
 
 The old cgo header, embedded DLL, and `skip_hook` submodule have been removed
 from the active codebase.
@@ -111,8 +130,8 @@ from the active codebase.
   default; `InputEvent.Own` and `InputEvent.ExtraInfo` expose that tag inside
   `makc`. `InjectMouseInput` and `InjectKeyboardInput` are sent with zero
   extra info on tested Windows 11 builds because non-zero extra info is
-  rejected by those APIs. macOS `CGEvent` injection does not currently expose
-  backend tagging.
+  rejected by those APIs. macOS `CGEvent` and Linux `uinput` injection do not
+  currently expose backend tagging.
 - Raw Input listening is opt-in because Windows keeps one raw-input
   registration per device class per process. Raw events include
   `InputEvent.Raw`, `InputEvent.Device`, and relative `MouseInputEvent.Move`
@@ -145,9 +164,26 @@ Build a macOS ARM64 smoke binary:
 GOOS=darwin GOARCH=arm64 go build -o dist/makc-smoke-darwin-arm64 ./cmd/makc-smoke
 ```
 
-By default the smoke command only opens the backend and reads current state. Add
-`-inject` to perform a tiny relative mouse move, and `-click` to also click the
-left mouse button.
+Build a Linux ARM64 smoke binary:
+
+```sh
+GOOS=linux GOARCH=arm64 go build -o dist/makc-smoke-linux-arm64 ./cmd/makc-smoke
+```
+
+On a Linux desktop or VM with Go installed, run the uinput smoke helper:
+
+```sh
+bash scripts/linux-smoke.sh
+```
+
+The helper loads `uinput` when possible, builds `makc-smoke`, and sends a tiny
+relative mouse move plus a `Shift` tap through the Linux `uinput` backend by
+default. Pass regular `makc-smoke` flags after the script name to customize the
+run.
+
+By default the smoke command opens the backend and reads current state where the
+backend supports it. Add `-inject` to perform a tiny relative mouse move, and
+`-click` to also click the left mouse button.
 
 For Parallels Desktop on Apple Silicon:
 

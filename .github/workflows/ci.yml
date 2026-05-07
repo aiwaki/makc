@@ -36,11 +36,24 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Linux uinput integration smoke
+        run: |
+          sudo modprobe uinput || true
+          if [ ! -e /dev/uinput ]; then
+            echo "::notice::/dev/uinput is unavailable; skipping uinput integration smoke"
+            exit 0
+          fi
+          sudo chmod a+rw /dev/uinput
+          MAKC_TEST_UINPUT=1 go test . -run TestLinuxUInputDeviceOpenIntegration -count=1 -v
+
       - name: Windows ARM64 compile tests
         run: GOOS=windows GOARCH=arm64 go test -exec=true ./...
 
       - name: macOS ARM64 compile tests
         run: GOOS=darwin GOARCH=arm64 go test -exec=true ./...
+
+      - name: Linux ARM64 compile tests
+        run: GOOS=linux GOARCH=arm64 go test -exec=true ./...
 
       - name: Vet
         run: go vet ./...
@@ -50,3 +63,6 @@ jobs:
 
       - name: macOS ARM64 vet
         run: GOOS=darwin GOARCH=arm64 go vet ./...
+
+      - name: Linux ARM64 vet
+        run: GOOS=linux GOARCH=arm64 go vet ./...

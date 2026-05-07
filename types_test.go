@@ -42,6 +42,7 @@ func TestInjectionBackendString(t *testing.T) {
 		MouseInjectionSendInput:        "sendinput",
 		MouseInjectionInjectMouseInput: "injectmouseinput",
 		MouseInjectionCGEvent:          "cgevent",
+		MouseInjectionUInput:           "uinput",
 		MouseInjectionBackend(0xFF):    "unknown",
 	}
 	for backend, want := range mouse {
@@ -55,6 +56,7 @@ func TestInjectionBackendString(t *testing.T) {
 		KeyboardInjectionSendInput:           "sendinput",
 		KeyboardInjectionInjectKeyboardInput: "injectkeyboardinput",
 		KeyboardInjectionCGEvent:             "cgevent",
+		KeyboardInjectionUInput:              "uinput",
 		KeyboardInjectionBackend(0xFF):       "unknown",
 	}
 	for backend, want := range keyboard {
