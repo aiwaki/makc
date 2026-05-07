@@ -107,9 +107,10 @@ client, err := makc.Open(
 The Linux `uinput` backend is injection-focused: it supports relative mouse
 movement, mouse buttons, wheel events, mapped key events, and raw Linux key-code
 scan events. Linux input state and listening use evdev `/dev/input/event*`
-devices. Cursor position, screen size, absolute movement, and Unicode text
-injection still need a separate display-server layer and currently return
-`ErrUnsupported`.
+devices. Cursor position, screen size, and absolute movement are available
+through an optional purego X11/Xlib layer when `DISPLAY` is set. Wayland
+absolute cursor control and Unicode text injection still need a display-server
+specific layer and currently return `ErrUnsupported`.
 
 The old cgo header, embedded DLL, and `skip_hook` submodule have been removed
 from the active codebase.
@@ -140,7 +141,9 @@ from the active codebase.
   data when the device reports it.
 - Linux evdev listening is raw `/dev/input/event*` input. It emits relative
   mouse moves, buttons, wheels, and mapped key events, but it does not provide
-  display-server cursor positions or injected-event markers.
+  display-server cursor positions or injected-event markers. Linux cursor
+  position, screen size, and absolute movement use X11/Xlib when `DISPLAY` is
+  available.
 - Name parsing: `ParseKey` and `ParseMouseButton` for CLIs and config files.
 
 The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
