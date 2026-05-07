@@ -40,9 +40,9 @@ func main() {
 	var dy int
 	var wait time.Duration
 
-	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput")
-	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput")
-	flag.StringVar(&inputTagName, "input-tag", "", "Win32 dwExtraInfo tag for injected inputs; empty uses the per-client default, 0 disables tagging")
+	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput, cgevent")
+	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput, cgevent")
+	flag.StringVar(&inputTagName, "input-tag", "", "backend tag for injected inputs where supported; empty uses the per-client default, 0 disables tagging")
 	flag.StringVar(&listenBackendName, "listen-backend", "auto", "listener backend: auto, hook, rawinput")
 	flag.StringVar(&buttonName, "button", "left", "mouse button: left, right, middle, x1, x2")
 	flag.StringVar(&tapKey, "tap", "", "keyboard key to tap")
@@ -366,6 +366,8 @@ func parseBackend(name string) (makc.MouseInjectionBackend, error) {
 		return makc.MouseInjectionSendInput, nil
 	case "injectmouseinput", "inject":
 		return makc.MouseInjectionInjectMouseInput, nil
+	case "cgevent", "quartz":
+		return makc.MouseInjectionCGEvent, nil
 	default:
 		return makc.MouseInjectionAuto, fmt.Errorf("unknown backend %q", name)
 	}
@@ -379,6 +381,8 @@ func parseKeyboardBackend(name string) (makc.KeyboardInjectionBackend, error) {
 		return makc.KeyboardInjectionSendInput, nil
 	case "injectkeyboardinput", "inject":
 		return makc.KeyboardInjectionInjectKeyboardInput, nil
+	case "cgevent", "quartz":
+		return makc.KeyboardInjectionCGEvent, nil
 	default:
 		return makc.KeyboardInjectionAuto, fmt.Errorf("unknown keyboard backend %q", name)
 	}

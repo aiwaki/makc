@@ -1,12 +1,16 @@
 # makc
 
-`makc` is a no-cgo mouse and keyboard control package for Windows.
+`makc` is a no-cgo mouse and keyboard control package for Windows and macOS.
 
 The current v2 work-in-progress replaces the old C header and embedded DLL
 with a pure Go backend built on:
 
 - [`github.com/ebitengine/purego`](https://github.com/ebitengine/purego)
 - [`golang.org/x/sys/windows`](https://pkg.go.dev/golang.org/x/sys/windows)
+
+Windows uses Win32 `SendInput` or `Inject*Input` backends. macOS uses
+CoreGraphics `CGEvent` through ApplicationServices and requires Accessibility
+permission for event injection.
 
 ## Example
 
@@ -15,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -48,10 +53,11 @@ func main() {
 	}
 
 	listener, err := client.Listen(ctx, makc.ListenOptions{Mask: makc.ListenAll})
-	if err != nil {
+	if err == nil {
+		defer listener.Close()
+	} else if !errors.Is(err, makc.ErrUnsupported) {
 		log.Fatal(err)
 	}
-	defer listener.Close()
 
 	profile := makc.EaseInOutMovement(12, 180*time.Millisecond)
 	if err := client.Mouse.DragBy(ctx, makc.ButtonLeft, 80, 40, profile); err != nil {
@@ -62,15 +68,24 @@ func main() {
 
 ## Backends
 
-`MouseInjectionAuto` prefers `user32!InjectMouseInput` when Windows exports the
-symbol and falls back to `SendInput` otherwise. `KeyboardInjectionAuto` does the
-same for `user32!InjectKeyboardInput`, falling back to keyboard `SendInput`
-when the symbol is absent. You can explicitly request backends:
+`MouseInjectionAuto` prefers `user32!InjectMouseInput` on Windows when Windows
+exports the symbol and falls back to `SendInput` otherwise. On macOS it selects
+the CoreGraphics `CGEvent` backend. `KeyboardInjectionAuto` follows the same
+platform split. You can explicitly request backends:
 
 ```go
 client, err := makc.Open(
 	makc.WithMouseInjection(makc.MouseInjectionInjectMouseInput),
 	makc.WithKeyboardInjection(makc.KeyboardInjectionInjectKeyboardInput),
+)
+```
+
+On macOS:
+
+```go
+client, err := makc.Open(
+	makc.WithMouseInjection(makc.MouseInjectionCGEvent),
+	makc.WithKeyboardInjection(makc.KeyboardInjectionCGEvent),
 )
 ```
 
@@ -88,12 +103,13 @@ from the active codebase.
 - Keyboard injection: `Press`, `Release`, `Tap`, `Combo`, `TypeText`,
   `ScanPress`, `ScanRelease`, `ScanTap`, and `Inject` batches.
 - Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook or
-  Raw Input backends, and optional injected-event reporting.
+  Raw Input backends, and optional injected-event reporting on Windows.
 - Own-event tagging: `SendInput` events get a per-client `dwExtraInfo` tag by
   default; `InputEvent.Own` and `InputEvent.ExtraInfo` expose that tag inside
   `makc`. `InjectMouseInput` and `InjectKeyboardInput` are sent with zero
   extra info on tested Windows 11 builds because non-zero extra info is
-  rejected by those APIs.
+  rejected by those APIs. macOS `CGEvent` injection does not currently expose
+  backend tagging.
 - Raw Input listening is opt-in because Windows keeps one raw-input
   registration per device class per process. Raw events include
   `InputEvent.Raw`, `InputEvent.Device`, and relative `MouseInputEvent.Move`
@@ -118,6 +134,12 @@ Build a Windows ARM64 smoke binary from macOS:
 
 ```sh
 GOOS=windows GOARCH=arm64 go build -o dist/makc-smoke-windows-arm64.exe ./cmd/makc-smoke
+```
+
+Build a macOS ARM64 smoke binary:
+
+```sh
+GOOS=darwin GOARCH=arm64 go build -o dist/makc-smoke-darwin-arm64 ./cmd/makc-smoke
 ```
 
 By default the smoke command only opens the backend and reads current state. Add

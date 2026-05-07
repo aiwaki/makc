@@ -74,6 +74,8 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 			return nil, unsupported("user32!InjectMouseInput is not available")
 		}
 	case MouseInjectionSendInput:
+	case MouseInjectionCGEvent:
+		return nil, unsupported("CGEvent mouse injection is only available on macOS")
 	default:
 		return nil, fmt.Errorf("makc: unknown mouse injection backend %d", cfg.mouseInjection)
 	}
@@ -91,6 +93,8 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 			return nil, unsupported("user32!InjectKeyboardInput is not available")
 		}
 	case KeyboardInjectionSendInput:
+	case KeyboardInjectionCGEvent:
+		return nil, unsupported("CGEvent keyboard injection is only available on macOS")
 	default:
 		return nil, fmt.Errorf("makc: unknown keyboard injection backend %d", cfg.keyboardInjection)
 	}
