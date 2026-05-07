@@ -1,6 +1,8 @@
 # makc
 
 `makc` is a no-cgo mouse and keyboard control package for Windows and macOS.
+It is pronounced `mak-see`, like `Maksim` without the final `m`. The name is
+also a compact acronym for **Mouse And Keyboard Control**.
 
 The current v2 work-in-progress replaces the old C header and embedded DLL
 with a pure Go backend built on:
