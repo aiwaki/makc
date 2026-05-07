@@ -1,6 +1,7 @@
 package makc
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -39,6 +40,61 @@ func TestMovementProfileEvents(t *testing.T) {
 		default:
 			t.Fatalf("unexpected event kind %d", event.Kind)
 		}
+	}
+}
+
+func TestNaturalMovementProfileEventsAreSeeded(t *testing.T) {
+	start := Point{X: 0, Y: 0}
+	end := Point{X: 400, Y: 120}
+
+	a := NaturalMovement(12, 90*time.Millisecond, 42).Events(start, end)
+	b := NaturalMovement(12, 90*time.Millisecond, 42).Events(start, end)
+	if !reflect.DeepEqual(a, b) {
+		t.Fatal("expected same seed to produce the same movement events")
+	}
+
+	c := NaturalMovement(12, 90*time.Millisecond, 43).Events(start, end)
+	if reflect.DeepEqual(a, c) {
+		t.Fatal("expected different seeds to produce different movement events")
+	}
+}
+
+func TestNaturalMovementProfileEndsAtTargetAndKeepsDuration(t *testing.T) {
+	start := Point{X: 10, Y: 20}
+	end := Point{X: 210, Y: 80}
+	duration := 75 * time.Millisecond
+
+	events := NaturalMovementWithJitter(8, duration, 12, 7).Events(start, end)
+	if len(events) != 15 {
+		t.Fatalf("len(events) = %d, want 15", len(events))
+	}
+
+	var lastMove MouseMove
+	var totalPause time.Duration
+	moveCount := 0
+	for _, event := range events {
+		switch event.Kind {
+		case MouseEventMove:
+			if event.Move.Relative {
+				t.Fatalf("natural movement emitted relative move: %+v", event)
+			}
+			lastMove = event.Move
+			moveCount++
+		case MouseEventPause:
+			totalPause += event.Duration
+		default:
+			t.Fatalf("unexpected event kind %d", event.Kind)
+		}
+	}
+
+	if moveCount != 8 {
+		t.Fatalf("move count = %d, want 8", moveCount)
+	}
+	if got := (Point{X: lastMove.X, Y: lastMove.Y}); got != end {
+		t.Fatalf("last move = %+v, want %+v", got, end)
+	}
+	if totalPause != duration {
+		t.Fatalf("total pause = %s, want %s", totalPause, duration)
 	}
 }
 

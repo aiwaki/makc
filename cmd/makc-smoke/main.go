@@ -34,7 +34,10 @@ func main() {
 	var wheel int
 	var hwheel int
 	var drag bool
+	var profileName string
 	var steps int
+	var jitter int
+	var seed int64
 	var duration time.Duration
 	var dx int
 	var dy int
@@ -60,7 +63,10 @@ func main() {
 	flag.IntVar(&wheel, "wheel", 0, "vertical wheel detents to inject")
 	flag.IntVar(&hwheel, "hwheel", 0, "horizontal wheel detents to inject")
 	flag.BoolVar(&drag, "drag", false, "drag from the current position by dx,dy")
+	flag.StringVar(&profileName, "profile", "ease", "movement profile used with -drag: instant, linear, ease, natural")
 	flag.IntVar(&steps, "steps", 8, "movement profile steps used with -drag")
+	flag.IntVar(&jitter, "jitter", 0, "natural movement max path jitter in pixels; 0 chooses a distance-based value")
+	flag.Int64Var(&seed, "seed", 1, "natural movement seed used with -profile natural")
 	flag.DurationVar(&duration, "duration", 120*time.Millisecond, "movement profile duration used with -drag")
 	flag.IntVar(&dx, "dx", 1, "relative X movement used with -inject")
 	flag.IntVar(&dy, "dy", 1, "relative Y movement used with -inject")
@@ -68,6 +74,10 @@ func main() {
 	flag.Parse()
 
 	backend, err := parseBackend(backendName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	profile, err := parseMovementProfile(profileName, steps, duration, jitter, seed)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -182,7 +192,6 @@ func main() {
 	}
 	if drag {
 		before := pos
-		profile := makc.EaseInOutMovement(steps, duration)
 		if err := client.Mouse.DragBy(ctx, button, dx, dy, profile); err != nil {
 			log.Fatal(err)
 		}
@@ -191,7 +200,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("dragged=%d,%d steps=%d duration=%s\n", dx, dy, steps, duration)
+		fmt.Printf("dragged=%d,%d profile=%s steps=%d duration=%s\n", dx, dy, profileName, steps, duration)
 		fmt.Printf("position_after=%d,%d\n", pos.X, pos.Y)
 		fmt.Printf("drag_verified=%v\n", pos != before)
 		return
@@ -398,6 +407,21 @@ func parseListenBackend(name string) (makc.ListenBackend, error) {
 		return makc.ListenBackendRawInput, nil
 	default:
 		return makc.ListenBackendAuto, fmt.Errorf("unknown listen backend %q", name)
+	}
+}
+
+func parseMovementProfile(name string, steps int, duration time.Duration, jitter int, seed int64) (makc.MovementProfile, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "ease", "easeinout", "ease-in-out":
+		return makc.EaseInOutMovement(steps, duration), nil
+	case "instant":
+		return makc.InstantMovement, nil
+	case "linear":
+		return makc.LinearMovement(steps, duration), nil
+	case "natural":
+		return makc.NaturalMovementWithJitter(steps, duration, jitter, seed), nil
+	default:
+		return makc.MovementProfile{}, fmt.Errorf("unknown movement profile %q", name)
 	}
 }
 
