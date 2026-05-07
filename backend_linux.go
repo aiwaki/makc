@@ -38,6 +38,7 @@ const (
 
 type linuxBackend struct {
 	device            *uinputDevice
+	x11               *linuxX11Display
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 }
@@ -74,18 +75,24 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		return nil, err
 	}
 
+	x11, _ := newLinuxX11Display()
+
 	return &linuxBackend{
 		device:            device,
+		x11:               x11,
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
 	}, nil
 }
 
 func (b *linuxBackend) Close() error {
-	if b == nil || b.device == nil {
+	if b == nil {
 		return nil
 	}
-	return b.device.Close()
+	return errors.Join(
+		b.device.Close(),
+		b.x11.Close(),
+	)
 }
 
 func (b *linuxBackend) MouseInjection() MouseInjectionBackend {
@@ -100,12 +107,18 @@ func (b *linuxBackend) InputTag() uintptr {
 	return 0
 }
 
-func (b *linuxBackend) ScreenSize(context.Context) (Point, error) {
-	return Point{}, unsupported("linux screen size requires a display-server backend")
+func (b *linuxBackend) ScreenSize(ctx context.Context) (Point, error) {
+	if b.x11 == nil {
+		return Point{}, unsupported("linux screen size requires an X11 DISPLAY")
+	}
+	return b.x11.screenSize(ctx)
 }
 
-func (b *linuxBackend) CursorPos(context.Context) (Point, error) {
-	return Point{}, unsupported("linux cursor position requires a display-server backend")
+func (b *linuxBackend) CursorPos(ctx context.Context) (Point, error) {
+	if b.x11 == nil {
+		return Point{}, unsupported("linux cursor position requires an X11 DISPLAY")
+	}
+	return b.x11.cursorPos(ctx)
 }
 
 func (b *linuxBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
@@ -138,7 +151,13 @@ func (b *linuxBackend) InjectMouse(ctx context.Context, events []MouseEvent) err
 		switch event.Kind {
 		case MouseEventMove:
 			if !event.Move.Relative {
-				return unsupported("linux uinput backend supports relative mouse movement only")
+				if b.x11 == nil {
+					return unsupported("linux absolute mouse movement requires an X11 DISPLAY")
+				}
+				if err := b.x11.movePointer(ctx, Point{X: event.Move.X, Y: event.Move.Y}); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := b.device.emitRelMove(event.Move.X, event.Move.Y); err != nil {
 				return err
