@@ -1,11 +1,11 @@
-//go:build !windows && !darwin
+//go:build !windows && !darwin && !linux
 
 package makc
 
 import "context"
 
 func newSystemBackend(config) (systemBackend, error) {
-	return nil, unsupported("only Windows is supported")
+	return nil, unsupported("only Windows, macOS, and Linux are supported")
 }
 
 type unsupportedBackend struct{}

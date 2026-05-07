@@ -76,6 +76,8 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	case MouseInjectionSendInput:
 	case MouseInjectionCGEvent:
 		return nil, unsupported("CGEvent mouse injection is only available on macOS")
+	case MouseInjectionUInput:
+		return nil, unsupported("uinput mouse injection is only available on Linux")
 	default:
 		return nil, fmt.Errorf("makc: unknown mouse injection backend %d", cfg.mouseInjection)
 	}
@@ -95,6 +97,8 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	case KeyboardInjectionSendInput:
 	case KeyboardInjectionCGEvent:
 		return nil, unsupported("CGEvent keyboard injection is only available on macOS")
+	case KeyboardInjectionUInput:
+		return nil, unsupported("uinput keyboard injection is only available on Linux")
 	default:
 		return nil, fmt.Errorf("makc: unknown keyboard injection backend %d", cfg.keyboardInjection)
 	}
