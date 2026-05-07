@@ -25,6 +25,7 @@ func main() {
 	var scanCode uint
 	var scanExtended bool
 	var listen bool
+	var capabilities bool
 	var listenCount int
 	var includeInjected bool
 	var normalizeOwnInjected bool
@@ -54,6 +55,7 @@ func main() {
 	flag.UintVar(&scanCode, "scan", 0, "scan code to tap")
 	flag.BoolVar(&scanExtended, "scan-extended", false, "mark -scan as an extended key")
 	flag.BoolVar(&listen, "listen", false, "listen for low-level mouse and keyboard events")
+	flag.BoolVar(&capabilities, "capabilities", false, "probe backend capabilities without visible clicks or text input")
 	flag.IntVar(&listenCount, "listen-count", 4, "number of events to print before stopping")
 	flag.BoolVar(&includeInjected, "include-injected", false, "include injected events in listener output")
 	flag.BoolVar(&normalizeOwnInjected, "normalize-own-injected", false, "clear injected markers in makc output for events tagged by this client")
@@ -129,6 +131,13 @@ func main() {
 	readBool("key_a_down", func() (bool, error) {
 		return client.Keyboard.Down(ctx, makc.KeyA)
 	})
+
+	if capabilities {
+		if err := runCapabilitySmoke(ctx, client, listenBackend, pos, hasPos, includeInjected, normalizeOwnInjected); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if listen {
 		if err := runListenSmoke(ctx, client, listenBackend, listenCount, includeInjected, normalizeOwnInjected); err != nil {
@@ -248,6 +257,53 @@ func readBool(name string, read func() (bool, error)) bool {
 	}
 	fmt.Printf("%s=%v\n", name, value)
 	return true
+}
+
+func runCapabilitySmoke(
+	ctx context.Context,
+	client *makc.Client,
+	listenBackend makc.ListenBackend,
+	pos makc.Point,
+	hasPos bool,
+	includeInjected bool,
+	normalizeOwnInjected bool,
+) error {
+	printCapability("relative_move", func() error {
+		return client.Mouse.Move(ctx, makc.Rel(0, 0))
+	})
+	printCapability("absolute_move", func() error {
+		if !hasPos {
+			return fmt.Errorf("%w: absolute movement requires readable cursor position", makc.ErrUnsupported)
+		}
+		return client.Mouse.Move(ctx, makc.Abs(pos.X, pos.Y))
+	})
+	printCapability("listen", func() error {
+		listenCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		listener, err := client.Listen(listenCtx, makc.ListenOptions{
+			Backend:              listenBackend,
+			Mask:                 makc.ListenAll,
+			Buffer:               1,
+			IncludeInjected:      includeInjected,
+			NormalizeOwnInjected: normalizeOwnInjected,
+		})
+		if err != nil {
+			return err
+		}
+		listener.Close()
+		return listener.Wait()
+	})
+	return nil
+}
+
+func printCapability(name string, probe func() error) {
+	err := probe()
+	if err != nil {
+		fmt.Printf("cap_%s=false\n", name)
+		fmt.Printf("cap_%s_error=%v\n", name, err)
+		return
+	}
+	fmt.Printf("cap_%s=true\n", name)
 }
 
 func runListenSmoke(ctx context.Context, client *makc.Client, backend makc.ListenBackend, count int, includeInjected bool, normalizeOwnInjected bool) error {
