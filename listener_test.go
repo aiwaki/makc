@@ -23,6 +23,20 @@ func TestNormalizeListenOptions(t *testing.T) {
 	}
 }
 
+func TestListenBackendString(t *testing.T) {
+	tests := map[ListenBackend]string{
+		ListenBackendAuto:         "auto",
+		ListenBackendLowLevelHook: "hook",
+		ListenBackendRawInput:     "rawinput",
+		ListenBackend(0xFF):       "unknown",
+	}
+	for backend, want := range tests {
+		if got := backend.String(); got != want {
+			t.Fatalf("ListenBackend(%d).String() = %q, want %q", backend, got, want)
+		}
+	}
+}
+
 func TestPrepareInputEventFiltersInjectedByDefault(t *testing.T) {
 	event := InputEvent{Injected: true}
 	if prepareInputEvent(&event, ListenOptions{}) {

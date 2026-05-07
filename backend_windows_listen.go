@@ -16,7 +16,8 @@ const (
 	whMouseLL    = 14
 	whKeyboardLL = 13
 
-	wmQuit = 0x0012
+	wmQuit  = 0x0012
+	wmInput = 0x00FF
 
 	wmMouseMove   = 0x0200
 	wmLButtonDown = 0x0201
@@ -40,17 +41,62 @@ const (
 	llkhfLowerIntegrityInjected = 0x00000002
 	llkhfInjected               = 0x00000010
 	llkhfAltDown                = 0x00000020
+
+	ridInput = 0x10000003
+
+	rimInput        = 0
+	rimTypeMouse    = 0
+	rimTypeKeyboard = 1
+
+	ridevRemove    = 0x00000001
+	ridevInputSink = 0x00000100
+
+	hidUsagePageGeneric = 0x01
+	hidUsageMouse       = 0x02
+	hidUsageKeyboard    = 0x06
+
+	rawMouseMoveAbsolute = 0x0001
+
+	rawMouseLeftButtonDown   = 0x0001
+	rawMouseLeftButtonUp     = 0x0002
+	rawMouseRightButtonDown  = 0x0004
+	rawMouseRightButtonUp    = 0x0008
+	rawMouseMiddleButtonDown = 0x0010
+	rawMouseMiddleButtonUp   = 0x0020
+	rawMouseButton4Down      = 0x0040
+	rawMouseButton4Up        = 0x0080
+	rawMouseButton5Down      = 0x0100
+	rawMouseButton5Up        = 0x0200
+	rawMouseWheel            = 0x0400
+	rawMouseHWheel           = 0x0800
+
+	rawKeyBreak = 0x0001
+	rawKeyE0    = 0x0002
+	rawKeyE1    = 0x0004
 )
 
 func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*Listener, error) {
 	opts = normalizeListenOptions(opts)
+	switch opts.Backend {
+	case ListenBackendAuto, ListenBackendLowLevelHook:
+		return b.listenWithRunner(ctx, opts, b.runHookInputListener)
+	case ListenBackendRawInput:
+		return b.listenWithRunner(ctx, opts, b.runRawInputListener)
+	default:
+		return nil, unsupported("unknown listen backend")
+	}
+}
+
+type inputListenerRunner func(context.Context, ListenOptions, chan<- InputEvent, chan<- error, chan<- error)
+
+func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, runner inputListenerRunner) (*Listener, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	events := make(chan InputEvent, opts.Buffer)
 	done := make(chan error, 1)
 	ready := make(chan error, 1)
 
-	go b.runInputListener(ctx, opts, events, ready, done)
+	go runner(ctx, opts, events, ready, done)
 
 	select {
 	case err := <-ready:
@@ -69,7 +115,7 @@ func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*List
 	}
 }
 
-func (b *winBackend) runInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(events)
@@ -166,12 +212,286 @@ func (b *winBackend) runInputListener(ctx context.Context, opts ListenOptions, e
 	done <- err
 }
 
+func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(events)
+
+	threadID := windows.GetCurrentThreadId()
+	className, err := windows.UTF16PtrFromString(fmt.Sprintf("makcRawInput%d", threadID))
+	if err != nil {
+		ready <- err
+		done <- nil
+		return
+	}
+	windowName, err := windows.UTF16PtrFromString("makc raw input")
+	if err != nil {
+		ready <- err
+		done <- nil
+		return
+	}
+
+	wndProc := windows.NewCallback(func(hwnd uintptr, message uint32, wParam uintptr, lParam uintptr) uintptr {
+		return b.api.defWindowProc(hwnd, message, wParam, lParam)
+	})
+
+	wc := wndClassEx{
+		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
+		LpfnWndProc:   wndProc,
+		LpszClassName: className,
+	}
+	if atom := b.api.registerClassEx(&wc); atom == 0 {
+		ready <- fmt.Errorf("makc: RegisterClassExW(raw input) failed: %w", lastWindowsError())
+		done <- nil
+		return
+	}
+	defer b.api.unregisterClass(className, 0)
+
+	hwnd := b.api.createWindowEx(0, className, windowName, 0, 0, 0, 0, 0, hwndMessage(), 0, 0, 0)
+	if hwnd == 0 {
+		ready <- fmt.Errorf("makc: CreateWindowExW(raw input) failed: %w", lastWindowsError())
+		done <- nil
+		return
+	}
+	defer b.api.destroyWindow(hwnd)
+
+	devices := rawInputDevices(opts.Mask, hwnd, ridevInputSink)
+	if len(devices) == 0 {
+		ready <- unsupported("empty listen mask")
+		done <- nil
+		return
+	}
+	if ok := b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{}))); ok == 0 {
+		ready <- fmt.Errorf("makc: RegisterRawInputDevices failed: %w", lastWindowsError())
+		done <- nil
+		return
+	}
+	defer b.unregisterRawInputDevices(opts.Mask)
+
+	emit := func(event InputEvent) {
+		markOwnInputEvent(&event, b.inputTag)
+		if !prepareInputEvent(&event, opts) {
+			return
+		}
+		select {
+		case events <- event:
+		default:
+		}
+	}
+
+	go func() {
+		<-ctx.Done()
+		b.api.postThreadMessage(threadID, wmQuit, 0, 0)
+	}()
+
+	ready <- nil
+
+	var stopped bool
+	var loopErr error
+	var msg winMsg
+	for {
+		result := b.api.getMessage(&msg, 0, 0, 0)
+		if result == -1 {
+			loopErr = fmt.Errorf("makc: GetMessageW failed: %w", lastWindowsError())
+			break
+		}
+		if result == 0 {
+			stopped = true
+			break
+		}
+		if msg.Message != wmInput {
+			continue
+		}
+		inputEvents, err := b.rawInputEvents(msg.LParam)
+		if msg.WParam == rimInput {
+			b.api.defWindowProc(msg.Hwnd, msg.Message, msg.WParam, msg.LParam)
+		}
+		if err != nil {
+			loopErr = err
+			break
+		}
+		for _, event := range inputEvents {
+			emit(event)
+		}
+	}
+
+	runtime.KeepAlive(className)
+	runtime.KeepAlive(windowName)
+	runtime.KeepAlive(wndProc)
+
+	if stopped {
+		done <- nil
+		return
+	}
+	done <- loopErr
+}
+
 func unhookAll(api *winAPI, hooks []uintptr) {
 	for i := len(hooks) - 1; i >= 0; i-- {
 		if hooks[i] != 0 {
 			api.unhookWindowsHookEx(hooks[i])
 		}
 	}
+}
+
+func rawInputDevices(mask ListenMask, hwnd uintptr, flags uint32) []rawInputDevice {
+	devices := make([]rawInputDevice, 0, 2)
+	if mask&ListenMouse != 0 {
+		devices = append(devices, rawInputDevice{
+			UsagePage:  hidUsagePageGeneric,
+			Usage:      hidUsageMouse,
+			Flags:      flags,
+			HwndTarget: hwnd,
+		})
+	}
+	if mask&ListenKeyboard != 0 {
+		devices = append(devices, rawInputDevice{
+			UsagePage:  hidUsagePageGeneric,
+			Usage:      hidUsageKeyboard,
+			Flags:      flags,
+			HwndTarget: hwnd,
+		})
+	}
+	return devices
+}
+
+func (b *winBackend) unregisterRawInputDevices(mask ListenMask) {
+	devices := rawInputDevices(mask, 0, ridevRemove)
+	if len(devices) == 0 {
+		return
+	}
+	b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{})))
+}
+
+func (b *winBackend) rawInputEvents(handle uintptr) ([]InputEvent, error) {
+	var size uint32
+	headerSize := uint32(unsafe.Sizeof(rawInputHeader{}))
+	if got := b.api.getRawInputData(handle, ridInput, nil, &size, headerSize); got == ^uint32(0) {
+		return nil, fmt.Errorf("makc: GetRawInputData(size) failed: %w", lastWindowsError())
+	}
+	if size == 0 {
+		return nil, nil
+	}
+
+	buf := make([]byte, size)
+	got := b.api.getRawInputData(handle, ridInput, unsafe.Pointer(&buf[0]), &size, headerSize)
+	if got == ^uint32(0) {
+		return nil, fmt.Errorf("makc: GetRawInputData(input) failed: %w", lastWindowsError())
+	}
+	return parseRawInputEvents(buf), nil
+}
+
+func parseRawInputEvents(buf []byte) []InputEvent {
+	if len(buf) < int(unsafe.Sizeof(rawInputHeader{})) {
+		return nil
+	}
+
+	header := (*rawInputHeader)(unsafe.Pointer(&buf[0]))
+	data := unsafe.Pointer(uintptr(unsafe.Pointer(&buf[0])) + unsafe.Sizeof(rawInputHeader{}))
+	base := InputEvent{
+		Time:   time.Now(),
+		Raw:    true,
+		Device: header.HDevice,
+	}
+
+	switch header.Type {
+	case rimTypeMouse:
+		if len(buf) < int(unsafe.Sizeof(rawInputHeader{})+unsafe.Sizeof(rawMouse{})) {
+			return nil
+		}
+		return rawMouseEvents(base, *(*rawMouse)(data))
+	case rimTypeKeyboard:
+		if len(buf) < int(unsafe.Sizeof(rawInputHeader{})+unsafe.Sizeof(rawKeyboard{})) {
+			return nil
+		}
+		if event, ok := rawKeyboardEvent(base, *(*rawKeyboard)(data)); ok {
+			return []InputEvent{event}
+		}
+	}
+	return nil
+}
+
+func rawMouseEvents(base InputEvent, mouse rawMouse) []InputEvent {
+	base.ExtraInfo = uintptr(mouse.ExtraInformation)
+	events := make([]InputEvent, 0, 4)
+
+	if mouse.LastX != 0 || mouse.LastY != 0 {
+		event := base
+		event.Kind = InputEventMouseMove
+		if mouse.Flags&rawMouseMoveAbsolute != 0 {
+			event.Mouse.Move = Abs(int(mouse.LastX), int(mouse.LastY))
+			event.Mouse.Position = Point{X: int(mouse.LastX), Y: int(mouse.LastY)}
+		} else {
+			event.Mouse.Move = Rel(int(mouse.LastX), int(mouse.LastY))
+		}
+		events = append(events, event)
+	}
+
+	addButton := func(flag uint16, button MouseButton, state State) {
+		if mouse.ButtonFlags&flag == 0 {
+			return
+		}
+		event := base
+		event.Kind = InputEventMouseButton
+		event.Mouse.Button = button
+		event.Mouse.State = state
+		events = append(events, event)
+	}
+	addButton(rawMouseLeftButtonDown, ButtonLeft, Down)
+	addButton(rawMouseLeftButtonUp, ButtonLeft, Up)
+	addButton(rawMouseRightButtonDown, ButtonRight, Down)
+	addButton(rawMouseRightButtonUp, ButtonRight, Up)
+	addButton(rawMouseMiddleButtonDown, ButtonMiddle, Down)
+	addButton(rawMouseMiddleButtonUp, ButtonMiddle, Up)
+	addButton(rawMouseButton4Down, ButtonX1, Down)
+	addButton(rawMouseButton4Up, ButtonX1, Up)
+	addButton(rawMouseButton5Down, ButtonX2, Down)
+	addButton(rawMouseButton5Up, ButtonX2, Up)
+
+	if mouse.ButtonFlags&rawMouseWheel != 0 {
+		event := base
+		event.Kind = InputEventMouseWheel
+		event.Mouse.Delta = int(int16(mouse.ButtonData))
+		events = append(events, event)
+	}
+	if mouse.ButtonFlags&rawMouseHWheel != 0 {
+		event := base
+		event.Kind = InputEventMouseHWheel
+		event.Mouse.Delta = int(int16(mouse.ButtonData))
+		events = append(events, event)
+	}
+
+	return events
+}
+
+func rawKeyboardEvent(base InputEvent, keyboard rawKeyboard) (InputEvent, bool) {
+	event := base
+	event.Kind = InputEventKey
+	event.ExtraInfo = uintptr(keyboard.ExtraInformation)
+	event.Keyboard = KeyboardInputEvent{
+		Key:      Key(keyboard.VKey),
+		ScanCode: keyboard.MakeCode,
+		Extended: keyboard.Flags&(rawKeyE0|rawKeyE1) != 0,
+	}
+
+	switch keyboard.Message {
+	case wmKeyDown, wmSysKeyDown:
+		event.Keyboard.State = Down
+	case wmKeyUp, wmSysKeyUp:
+		event.Keyboard.State = Up
+	default:
+		if keyboard.Flags&rawKeyBreak != 0 {
+			event.Keyboard.State = Up
+		} else {
+			event.Keyboard.State = Down
+		}
+	}
+
+	return event, true
+}
+
+func hwndMessage() uintptr {
+	return ^uintptr(2)
 }
 
 func mouseHookEvent(message uint32, hook *msllHookStruct) (InputEvent, bool) {
@@ -293,4 +613,53 @@ type kbdllHookStruct struct {
 	Flags       uint32
 	Time        uint32
 	DwExtraInfo uintptr
+}
+
+type rawInputDevice struct {
+	UsagePage  uint16
+	Usage      uint16
+	Flags      uint32
+	HwndTarget uintptr
+}
+
+type wndClassEx struct {
+	CbSize        uint32
+	Style         uint32
+	LpfnWndProc   uintptr
+	CbClsExtra    int32
+	CbWndExtra    int32
+	HInstance     uintptr
+	HIcon         uintptr
+	HCursor       uintptr
+	HbrBackground uintptr
+	LpszMenuName  *uint16
+	LpszClassName *uint16
+	HIconSm       uintptr
+}
+
+type rawInputHeader struct {
+	Type    uint32
+	Size    uint32
+	HDevice uintptr
+	WParam  uintptr
+}
+
+type rawMouse struct {
+	Flags            uint16
+	_                uint16
+	ButtonFlags      uint16
+	ButtonData       uint16
+	RawButtons       uint32
+	LastX            int32
+	LastY            int32
+	ExtraInformation uint32
+}
+
+type rawKeyboard struct {
+	MakeCode         uint16
+	Flags            uint16
+	Reserved         uint16
+	VKey             uint16
+	Message          uint32
+	ExtraInformation uint32
 }
