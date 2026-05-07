@@ -16,10 +16,40 @@ const (
 
 // ListenOptions configures input listening.
 type ListenOptions struct {
+	Backend              ListenBackend
 	Mask                 ListenMask
 	Buffer               int
 	IncludeInjected      bool
 	NormalizeOwnInjected bool
+}
+
+// ListenBackend selects the Windows input listening primitive.
+type ListenBackend uint8
+
+const (
+	// ListenBackendAuto uses low-level hooks. Raw Input is intentionally
+	// opt-in because Windows keeps one raw-input registration per device class
+	// per process.
+	ListenBackendAuto ListenBackend = iota
+
+	// ListenBackendLowLevelHook uses WH_MOUSE_LL and WH_KEYBOARD_LL.
+	ListenBackendLowLevelHook
+
+	// ListenBackendRawInput uses RegisterRawInputDevices and WM_INPUT.
+	ListenBackendRawInput
+)
+
+func (b ListenBackend) String() string {
+	switch b {
+	case ListenBackendAuto:
+		return "auto"
+	case ListenBackendLowLevelHook:
+		return "hook"
+	case ListenBackendRawInput:
+		return "rawinput"
+	default:
+		return "unknown"
+	}
 }
 
 // InputEventKind describes one listened input event.
@@ -40,6 +70,8 @@ type InputEvent struct {
 	Injected               bool
 	LowerIntegrityInjected bool
 	Own                    bool
+	Raw                    bool
+	Device                 uintptr
 	ExtraInfo              uintptr
 	Mouse                  MouseInputEvent
 	Keyboard               KeyboardInputEvent
@@ -48,6 +80,7 @@ type InputEvent struct {
 // MouseInputEvent contains listened mouse event data.
 type MouseInputEvent struct {
 	Position Point
+	Move     MouseMove
 	Button   MouseButton
 	State    State
 	Delta    int
@@ -86,7 +119,7 @@ func (l *Listener) Wait() error {
 	return <-l.done
 }
 
-// Listen starts a low-level input listener.
+// Listen starts an input listener.
 func (c *Client) Listen(ctx context.Context, opts ListenOptions) (*Listener, error) {
 	if err := c.ensureReady(ctx); err != nil {
 		return nil, err

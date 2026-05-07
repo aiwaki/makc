@@ -87,13 +87,17 @@ from the active codebase.
 - Keyboard state: `State`, `Down`.
 - Keyboard injection: `Press`, `Release`, `Tap`, `Combo`, `TypeText`,
   `ScanPress`, `ScanRelease`, `ScanTap`, and `Inject` batches.
-- Input listener: `Client.Listen` with mouse/keyboard masks and optional
-  injected-event reporting.
+- Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook or
+  Raw Input backends, and optional injected-event reporting.
 - Own-event tagging: `SendInput` events get a per-client `dwExtraInfo` tag by
   default; `InputEvent.Own` and `InputEvent.ExtraInfo` expose that tag inside
   `makc`. `InjectMouseInput` and `InjectKeyboardInput` are sent with zero
   extra info on tested Windows 11 builds because non-zero extra info is
   rejected by those APIs.
+- Raw Input listening is opt-in because Windows keeps one raw-input
+  registration per device class per process. Raw events include
+  `InputEvent.Raw`, `InputEvent.Device`, and relative `MouseInputEvent.Move`
+  data when the device reports it.
 - Name parsing: `ParseKey` and `ParseMouseButton` for CLIs and config files.
 
 The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
@@ -128,8 +132,13 @@ bash scripts/parallels-smoke.sh -backend injectmouseinput -inject -dx 1 -dy 1
 bash scripts/parallels-smoke.sh -backend injectmouseinput -drag -dx 80 -dy 40
 bash scripts/parallels-smoke.sh -keyboard-backend injectkeyboardinput -tap shift -scan 0x2A
 bash scripts/parallels-smoke.sh -listen -include-injected -listen-count 3
+bash scripts/parallels-smoke.sh -listen -listen-backend rawinput -listen-count 1
 bash scripts/parallels-smoke.sh -backend sendinput -keyboard-backend sendinput -input-tag 0x1234 -listen -normalize-own-injected -listen-count 3
 ```
+
+The Raw Input smoke command validates that the backend registers and starts; it
+prints raw events if you move the mouse or press a key inside the VM during the
+short listen window.
 
 The script uses `prlctl exec --current-user` so Windows APIs run in the
 interactive user session. If Parallels reports a successful resume but the VM

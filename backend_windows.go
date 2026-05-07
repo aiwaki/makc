@@ -522,6 +522,14 @@ type winAPI struct {
 	injectMouseInput    func(*injectedMouseInput, int32) int32
 	injectKeyboardInput func(*keyboardInput, int32) int32
 
+	registerRawInputDevices func(*rawInputDevice, uint32, uint32) int32
+	getRawInputData         func(uintptr, uint32, unsafe.Pointer, *uint32, uint32) uint32
+	registerClassEx         func(*wndClassEx) uint16
+	createWindowEx          func(uint32, *uint16, *uint16, uint32, int32, int32, int32, int32, uintptr, uintptr, uintptr, uintptr) uintptr
+	defWindowProc           func(uintptr, uint32, uintptr, uintptr) uintptr
+	destroyWindow           func(uintptr) int32
+	unregisterClass         func(*uint16, uintptr) int32
+
 	setWindowsHookEx    func(int32, uintptr, uintptr, uint32) uintptr
 	callNextHookEx      func(uintptr, int32, uintptr, uintptr) uintptr
 	unhookWindowsHookEx func(uintptr) int32
@@ -548,6 +556,27 @@ func newWinAPI() (*winAPI, error) {
 		return nil, err
 	}
 	if err := registerProc(handle, &api.sendInput, "SendInput"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.registerRawInputDevices, "RegisterRawInputDevices"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.getRawInputData, "GetRawInputData"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.registerClassEx, "RegisterClassExW"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.createWindowEx, "CreateWindowExW"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.defWindowProc, "DefWindowProcW"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.destroyWindow, "DestroyWindow"); err != nil {
+		return nil, err
+	}
+	if err := registerProc(handle, &api.unregisterClass, "UnregisterClassW"); err != nil {
 		return nil, err
 	}
 	if err := registerProc(handle, &api.setWindowsHookEx, "SetWindowsHookExW"); err != nil {

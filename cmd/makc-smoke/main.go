@@ -17,6 +17,7 @@ func main() {
 	var backendName string
 	var keyboardBackendName string
 	var inputTagName string
+	var listenBackendName string
 	var buttonName string
 	var tapKey string
 	var comboKeys string
@@ -42,6 +43,7 @@ func main() {
 	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput")
 	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput")
 	flag.StringVar(&inputTagName, "input-tag", "", "Win32 dwExtraInfo tag for injected inputs; empty uses the per-client default, 0 disables tagging")
+	flag.StringVar(&listenBackendName, "listen-backend", "auto", "listener backend: auto, hook, rawinput")
 	flag.StringVar(&buttonName, "button", "left", "mouse button: left, right, middle, x1, x2")
 	flag.StringVar(&tapKey, "tap", "", "keyboard key to tap")
 	flag.StringVar(&comboKeys, "combo", "", "keyboard combo such as control+a")
@@ -78,6 +80,10 @@ func main() {
 		log.Fatal(err)
 	}
 	inputTag, hasInputTag, err := parseInputTag(inputTagName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	listenBackend, err := parseListenBackend(listenBackendName)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -123,7 +129,7 @@ func main() {
 	fmt.Printf("key_a_down=%v\n", a)
 
 	if listen {
-		if err := runListenSmoke(ctx, client, listenCount, includeInjected, normalizeOwnInjected); err != nil {
+		if err := runListenSmoke(ctx, client, listenBackend, listenCount, includeInjected, normalizeOwnInjected); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -221,7 +227,7 @@ func main() {
 	}
 }
 
-func runListenSmoke(ctx context.Context, client *makc.Client, count int, includeInjected bool, normalizeOwnInjected bool) error {
+func runListenSmoke(ctx context.Context, client *makc.Client, backend makc.ListenBackend, count int, includeInjected bool, normalizeOwnInjected bool) error {
 	if count <= 0 {
 		count = 1
 	}
@@ -230,6 +236,7 @@ func runListenSmoke(ctx context.Context, client *makc.Client, count int, include
 	defer cancel()
 
 	listener, err := client.Listen(listenCtx, makc.ListenOptions{
+		Backend:              backend,
 		Mask:                 makc.ListenAll,
 		Buffer:               32,
 		IncludeInjected:      includeInjected,
@@ -256,8 +263,10 @@ func runListenSmoke(ctx context.Context, client *makc.Client, count int, include
 			if !ok {
 				return listener.Wait()
 			}
-			fmt.Printf("event=%s injected=%v lower=%v own=%v extra=0x%X %s\n",
+			fmt.Printf("event=%s raw=%v device=0x%X injected=%v lower=%v own=%v extra=0x%X %s\n",
 				inputEventKindName(event.Kind),
+				event.Raw,
+				event.Device,
 				event.Injected,
 				event.LowerIntegrityInjected,
 				event.Own,
@@ -301,7 +310,11 @@ func inputEventKindName(kind makc.InputEventKind) string {
 func inputEventDetail(event makc.InputEvent) string {
 	switch event.Kind {
 	case makc.InputEventMouseMove:
-		return fmt.Sprintf("pos=%d,%d", event.Mouse.Position.X, event.Mouse.Position.Y)
+		detail := fmt.Sprintf("pos=%d,%d", event.Mouse.Position.X, event.Mouse.Position.Y)
+		if event.Raw || event.Mouse.Move.X != 0 || event.Mouse.Move.Y != 0 {
+			detail += fmt.Sprintf(" move=%s:%d,%d", moveKind(event.Mouse.Move), event.Mouse.Move.X, event.Mouse.Move.Y)
+		}
+		return detail
 	case makc.InputEventMouseButton:
 		return fmt.Sprintf("button=%s state=%s pos=%d,%d", event.Mouse.Button, event.Mouse.State, event.Mouse.Position.X, event.Mouse.Position.Y)
 	case makc.InputEventMouseWheel, makc.InputEventMouseHWheel:
@@ -311,6 +324,13 @@ func inputEventDetail(event makc.InputEvent) string {
 	default:
 		return ""
 	}
+}
+
+func moveKind(move makc.MouseMove) string {
+	if move.Relative {
+		return "rel"
+	}
+	return "abs"
 }
 
 func parseKeys(value string) ([]makc.Key, error) {
@@ -361,6 +381,19 @@ func parseKeyboardBackend(name string) (makc.KeyboardInjectionBackend, error) {
 		return makc.KeyboardInjectionInjectKeyboardInput, nil
 	default:
 		return makc.KeyboardInjectionAuto, fmt.Errorf("unknown keyboard backend %q", name)
+	}
+}
+
+func parseListenBackend(name string) (makc.ListenBackend, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "auto":
+		return makc.ListenBackendAuto, nil
+	case "hook", "lowlevelhook", "low-level-hook":
+		return makc.ListenBackendLowLevelHook, nil
+	case "rawinput", "raw":
+		return makc.ListenBackendRawInput, nil
+	default:
+		return makc.ListenBackendAuto, fmt.Errorf("unknown listen backend %q", name)
 	}
 }
 
