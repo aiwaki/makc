@@ -46,7 +46,7 @@ func main() {
 	flag.StringVar(&backendName, "backend", "auto", "mouse injection backend: auto, sendinput, injectmouseinput, cgevent, uinput")
 	flag.StringVar(&keyboardBackendName, "keyboard-backend", "auto", "keyboard injection backend: auto, sendinput, injectkeyboardinput, cgevent, uinput")
 	flag.StringVar(&inputTagName, "input-tag", "", "backend tag for injected inputs where supported; empty uses the per-client default, 0 disables tagging")
-	flag.StringVar(&listenBackendName, "listen-backend", "auto", "listener backend: auto, hook, rawinput")
+	flag.StringVar(&listenBackendName, "listen-backend", "auto", "listener backend: auto, hook, rawinput, evdev")
 	flag.StringVar(&buttonName, "button", "left", "mouse button: left, right, middle, x1, x2")
 	flag.StringVar(&tapKey, "tap", "", "keyboard key to tap")
 	flag.StringVar(&comboKeys, "combo", "", "keyboard combo such as control+a")
@@ -423,6 +423,8 @@ func parseListenBackend(name string) (makc.ListenBackend, error) {
 		return makc.ListenBackendLowLevelHook, nil
 	case "rawinput", "raw":
 		return makc.ListenBackendRawInput, nil
+	case "evdev":
+		return makc.ListenBackendEvdev, nil
 	default:
 		return makc.ListenBackendAuto, fmt.Errorf("unknown listen backend %q", name)
 	}
