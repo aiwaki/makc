@@ -181,6 +181,25 @@ relative mouse move plus a `Shift` tap through the Linux `uinput` backend by
 default. Pass regular `makc-smoke` flags after the script name to customize the
 run.
 
+On macOS with Parallels Desktop and a Linux VM with Parallels Tools installed,
+run the host-side Fedora smoke helper:
+
+```sh
+bash scripts/parallels-linux-smoke.sh
+```
+
+The helper builds the Linux smoke binary on the Mac, copies it through the
+Parallels shared Home folder using a temporary staging directory without spaces,
+and runs the uinput smoke suite in the guest via `prlctl exec`. Set
+`MAKC_PARALLELS_LINUX_VM` when the VM is not named `Fedora Linux (1)`.
+
+To allow non-root Linux uinput injection, run this inside the Linux guest and
+then log out and back in:
+
+```sh
+sudo bash scripts/linux-uinput-permissions.sh "$USER"
+```
+
 By default the smoke command opens the backend and reads current state where the
 backend supports it. Add `-inject` to perform a tiny relative mouse move, and
 `-click` to also click the left mouse button.

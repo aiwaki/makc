@@ -30,10 +30,7 @@ Try:
   sudo modprobe uinput
 
 For a persistent setup, add a udev rule such as:
-  echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-  sudo usermod -aG input "$USER"
-  sudo udevadm control --reload-rules
-  sudo udevadm trigger
+  sudo bash scripts/linux-uinput-permissions.sh "$USER"
 
 Then log out and back in so the new group membership applies.
 EOF
@@ -58,10 +55,7 @@ Either run:
   sudo bash scripts/linux-smoke.sh
 
 Or configure persistent permissions with:
-  echo 'KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-  sudo usermod -aG input "$USER"
-  sudo udevadm control --reload-rules
-  sudo udevadm trigger
+  sudo bash scripts/linux-uinput-permissions.sh "$USER"
 
 Then log out and back in.
 EOF
