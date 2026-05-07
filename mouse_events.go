@@ -2,6 +2,7 @@ package makc
 
 import (
 	"math"
+	"math/rand"
 	"time"
 )
 
@@ -79,6 +80,7 @@ type MovementCurve uint8
 const (
 	MovementLinear MovementCurve = iota
 	MovementEaseInOut
+	MovementNatural
 )
 
 // MovementProfile describes a deterministic absolute cursor path.
@@ -86,6 +88,8 @@ type MovementProfile struct {
 	Steps    int
 	Duration time.Duration
 	Curve    MovementCurve
+	Jitter   int
+	Seed     int64
 }
 
 // InstantMovement jumps to the target in one event.
@@ -110,9 +114,31 @@ func EaseInOutMovement(steps int, duration time.Duration) MovementProfile {
 	}
 }
 
+// NaturalMovement creates a seeded Bezier movement profile with varied pauses.
+// Pass a different seed when you want a different reproducible path.
+func NaturalMovement(steps int, duration time.Duration, seed int64) MovementProfile {
+	return NaturalMovementWithJitter(steps, duration, 0, seed)
+}
+
+// NaturalMovementWithJitter creates a seeded movement profile with an explicit
+// maximum path jitter in pixels. A zero jitter lets makc choose a distance-based
+// value.
+func NaturalMovementWithJitter(steps int, duration time.Duration, jitter int, seed int64) MovementProfile {
+	return MovementProfile{
+		Steps:    steps,
+		Duration: duration,
+		Curve:    MovementNatural,
+		Jitter:   jitter,
+		Seed:     seed,
+	}
+}
+
 // Events returns the movement events from start to end.
 func (p MovementProfile) Events(start, end Point) []MouseEvent {
 	p = p.normalized()
+	if p.Curve == MovementNatural {
+		return p.naturalEvents(start, end)
+	}
 
 	events := make([]MouseEvent, 0, p.Steps*2)
 	delay := time.Duration(0)
@@ -143,14 +169,147 @@ func (p MovementProfile) normalized() MovementProfile {
 	if p.Duration < 0 {
 		p.Duration = 0
 	}
+	if p.Jitter < 0 {
+		p.Jitter = 0
+	}
 	return p
 }
 
 func (p MovementProfile) applyCurve(t float64) float64 {
 	switch p.Curve {
-	case MovementEaseInOut:
+	case MovementEaseInOut, MovementNatural:
 		return t * t * (3 - 2*t)
 	default:
 		return t
 	}
+}
+
+func (p MovementProfile) naturalEvents(start, end Point) []MouseEvent {
+	rng := rand.New(rand.NewSource(p.Seed))
+	pauses := p.naturalPauses(rng)
+	events := make([]MouseEvent, 0, p.Steps*2)
+
+	from := floatPoint{X: float64(start.X), Y: float64(start.Y)}
+	to := floatPoint{X: float64(end.X), Y: float64(end.Y)}
+	dx := to.X - from.X
+	dy := to.Y - from.Y
+	distance := math.Hypot(dx, dy)
+
+	control1, control2 := naturalControlPoints(rng, from, to, distance, p.naturalJitter(distance))
+
+	for i := 1; i <= p.Steps; i++ {
+		t := p.applyCurve(float64(i) / float64(p.Steps))
+		point := cubicBezier(from, control1, control2, to, t)
+		if i == p.Steps {
+			point = to
+		} else {
+			point = addNaturalJitter(rng, point, p.naturalJitter(distance)*0.18, t)
+		}
+
+		events = append(events, MouseMoveEvent(Abs(
+			int(math.Round(point.X)),
+			int(math.Round(point.Y)),
+		)))
+		if i < p.Steps && len(pauses) > 0 && pauses[i-1] > 0 {
+			events = append(events, MousePauseEvent(pauses[i-1]))
+		}
+	}
+
+	return events
+}
+
+func (p MovementProfile) naturalPauses(rng *rand.Rand) []time.Duration {
+	count := p.Steps - 1
+	if count <= 0 || p.Duration <= 0 {
+		return nil
+	}
+
+	weights := make([]float64, count)
+	var total float64
+	for i := range weights {
+		weights[i] = 0.65 + rng.Float64()*0.7
+		total += weights[i]
+	}
+
+	pauses := make([]time.Duration, count)
+	remaining := p.Duration
+	for i, weight := range weights {
+		if i == len(weights)-1 {
+			pauses[i] = remaining
+			break
+		}
+		pause := time.Duration(float64(p.Duration) * weight / total)
+		if pause > remaining {
+			pause = remaining
+		}
+		pauses[i] = pause
+		remaining -= pause
+	}
+	return pauses
+}
+
+func (p MovementProfile) naturalJitter(distance float64) float64 {
+	if distance < 2 {
+		return 0
+	}
+	if p.Jitter > 0 {
+		return float64(p.Jitter)
+	}
+	return math.Min(32, math.Max(1, distance*0.08))
+}
+
+func naturalControlPoints(rng *rand.Rand, from, to floatPoint, distance, jitter float64) (floatPoint, floatPoint) {
+	dx := to.X - from.X
+	dy := to.Y - from.Y
+	if distance == 0 {
+		return from, to
+	}
+
+	perpX := -dy / distance
+	perpY := dx / distance
+	offset1 := signedFloat(rng, jitter)
+	offset2 := signedFloat(rng, jitter)
+	tangent1 := signedFloat(rng, jitter*0.25)
+	tangent2 := signedFloat(rng, jitter*0.25)
+
+	return floatPoint{
+			X: from.X + dx*0.33 + perpX*offset1 + (dx/distance)*tangent1,
+			Y: from.Y + dy*0.33 + perpY*offset1 + (dy/distance)*tangent1,
+		}, floatPoint{
+			X: from.X + dx*0.66 + perpX*offset2 + (dx/distance)*tangent2,
+			Y: from.Y + dy*0.66 + perpY*offset2 + (dy/distance)*tangent2,
+		}
+}
+
+func addNaturalJitter(rng *rand.Rand, point floatPoint, amount float64, t float64) floatPoint {
+	if amount <= 0 {
+		return point
+	}
+	falloff := math.Sin(math.Pi * t)
+	return floatPoint{
+		X: point.X + signedFloat(rng, amount)*falloff,
+		Y: point.Y + signedFloat(rng, amount)*falloff,
+	}
+}
+
+func cubicBezier(p0, p1, p2, p3 floatPoint, t float64) floatPoint {
+	u := 1 - t
+	uu := u * u
+	tt := t * t
+	return floatPoint{
+		X: uu*u*p0.X + 3*uu*t*p1.X + 3*u*tt*p2.X + tt*t*p3.X,
+		Y: uu*u*p0.Y + 3*uu*t*p1.Y + 3*u*tt*p2.Y + tt*t*p3.Y,
+	}
+}
+
+func signedFloat(rng *rand.Rand, magnitude float64) float64 {
+	if magnitude <= 0 {
+		return 0
+	}
+	return (rng.Float64()*2 - 1) * magnitude
+}
+
+type floatPoint struct {
+	X float64
+	Y float64
 }

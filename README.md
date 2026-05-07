@@ -97,8 +97,9 @@ from the active codebase.
 - Mouse state: `Position`, `ScreenSize`, `State`, `Down`.
 - Mouse injection: `Move`, `MoveTo`, `MoveBy`, `Press`, `Release`, `Click`,
   `Wheel`, `HWheel`, and `Inject` batches.
-- Deterministic mouse paths: `InstantMovement`, `LinearMovement`,
-  `EaseInOutMovement`, `MoveToProfile`, `Drag`, `DragFrom`, and `DragBy`.
+- Deterministic and seeded mouse paths: `InstantMovement`, `LinearMovement`,
+  `EaseInOutMovement`, `NaturalMovement`, `NaturalMovementWithJitter`,
+  `MoveToProfile`, `Drag`, `DragFrom`, and `DragBy`.
 - Keyboard state: `State`, `Down`.
 - Keyboard injection: `Press`, `Release`, `Tap`, `Combo`, `TypeText`,
   `ScanPress`, `ScanRelease`, `ScanTap`, and `Inject` batches.
@@ -152,6 +153,7 @@ For Parallels Desktop on Apple Silicon:
 bash scripts/parallels-smoke.sh
 bash scripts/parallels-smoke.sh -backend injectmouseinput -inject -dx 1 -dy 1
 bash scripts/parallels-smoke.sh -backend injectmouseinput -drag -dx 80 -dy 40
+bash scripts/parallels-smoke.sh -backend injectmouseinput -drag -profile natural -seed 42 -dx 80 -dy 40
 bash scripts/parallels-smoke.sh -keyboard-backend injectkeyboardinput -tap shift -scan 0x2A
 bash scripts/parallels-smoke.sh -listen -include-injected -listen-count 3
 bash scripts/parallels-smoke.sh -listen -listen-backend rawinput -listen-count 1
