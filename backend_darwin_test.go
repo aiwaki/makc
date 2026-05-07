@@ -21,21 +21,29 @@ func TestDarwinAPIEventCreation(t *testing.T) {
 	if event == 0 {
 		t.Fatal("CGEventCreateMouseEvent returned 0")
 	}
+	api.cgEventSetIntegerValueField(event, cgMouseEventDeltaX, 1)
+	api.cgEventSetIntegerValueField(event, cgMouseEventDeltaY, 1)
 	api.cfRelease(event)
 
-	event = api.cgEventCreateScrollWheelEvent(0, cgScrollEventUnitLine, 2, int32(1), int32(0))
+	source := api.cgEventSourceCreate(cgEventSourceStateHIDSystem)
+	if source == 0 {
+		t.Fatal("CGEventSourceCreate returned 0")
+	}
+
+	event = api.cgEventCreateScrollWheelEvent(source, cgScrollEventUnitLine, 2, int32(1), int32(0))
 	if event == 0 {
 		t.Fatal("CGEventCreateScrollWheelEvent returned 0")
 	}
 	api.cfRelease(event)
 
-	event = api.cgEventCreateKeyboardEvent(0, 0, true)
+	event = api.cgEventCreateKeyboardEvent(source, 0, true)
 	if event == 0 {
 		t.Fatal("CGEventCreateKeyboardEvent returned 0")
 	}
 	units := []uint16{'a'}
 	api.cgEventKeyboardSetUnicodeString(event, uintptr(len(units)), &units[0])
 	api.cfRelease(event)
+	api.cfRelease(source)
 }
 
 func TestDarwinKeyCode(t *testing.T) {

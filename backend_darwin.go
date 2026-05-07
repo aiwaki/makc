@@ -30,6 +30,9 @@ const (
 
 	cgEventSourceStateHIDSystem = 1
 
+	cgMouseEventDeltaX = 4
+	cgMouseEventDeltaY = 5
+
 	cgScrollEventUnitLine = 1
 
 	cgMouseButtonLeft   = 0
@@ -261,15 +264,17 @@ func (b *darwinBackend) cursorLocation() (cgPoint, error) {
 }
 
 func (b *darwinBackend) postMouseMove(move MouseMove) error {
+	current, err := b.cursorLocation()
+	if err != nil {
+		return err
+	}
 	location := cgPoint{X: float64(move.X), Y: float64(move.Y)}
 	if move.Relative {
-		current, err := b.cursorLocation()
-		if err != nil {
-			return err
-		}
 		location.X += current.X
 		location.Y += current.Y
 	}
+	deltaX := int64(math.Round(location.X - current.X))
+	deltaY := int64(math.Round(location.Y - current.Y))
 
 	eventType := uint32(cgEventMouseMoved)
 	button := uint32(cgMouseButtonLeft)
@@ -277,7 +282,7 @@ func (b *darwinBackend) postMouseMove(move MouseMove) error {
 		eventType = darwinMouseDraggedEventType(dragButton)
 		button = dragButton
 	}
-	return b.postMouseEvent(eventType, location, button)
+	return b.postMouseEvent(eventType, location, button, deltaX, deltaY)
 }
 
 func (b *darwinBackend) postMouseButton(button MouseButton, state State) error {
@@ -293,19 +298,29 @@ func (b *darwinBackend) postMouseButton(button MouseButton, state State) error {
 		return err
 	}
 	eventType := darwinMouseButtonEventType(cgButton, state)
-	if err := b.postMouseEvent(eventType, location, cgButton); err != nil {
+	if err := b.postMouseEvent(eventType, location, cgButton, 0, 0); err != nil {
 		return err
 	}
 	b.setPressedMouseButton(cgButton, state)
 	return nil
 }
 
-func (b *darwinBackend) postMouseEvent(eventType uint32, location cgPoint, button uint32) error {
-	event := b.api.cgEventCreateMouseEvent(0, eventType, location, button)
+func (b *darwinBackend) postMouseEvent(eventType uint32, location cgPoint, button uint32, deltaX int64, deltaY int64) error {
+	source, err := b.eventSource()
+	if err != nil {
+		return err
+	}
+	defer b.api.cfRelease(source)
+
+	event := b.api.cgEventCreateMouseEvent(source, eventType, location, button)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateMouseEvent failed")
 	}
 	defer b.api.cfRelease(event)
+	if deltaX != 0 || deltaY != 0 {
+		b.api.cgEventSetIntegerValueField(event, cgMouseEventDeltaX, deltaX)
+		b.api.cgEventSetIntegerValueField(event, cgMouseEventDeltaY, deltaY)
+	}
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
 }
@@ -314,7 +329,13 @@ func (b *darwinBackend) postScroll(vertical, horizontal int32) error {
 	if vertical == 0 && horizontal == 0 {
 		return nil
 	}
-	event := b.api.cgEventCreateScrollWheelEvent(0, cgScrollEventUnitLine, 2, vertical, horizontal)
+	source, err := b.eventSource()
+	if err != nil {
+		return err
+	}
+	defer b.api.cfRelease(source)
+
+	event := b.api.cgEventCreateScrollWheelEvent(source, cgScrollEventUnitLine, 2, vertical, horizontal)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateScrollWheelEvent failed")
 	}
@@ -327,7 +348,13 @@ func (b *darwinBackend) postKeyboard(keyCode uint16, state State) error {
 	if !state.valid() {
 		return errors.New("makc: key state is unknown")
 	}
-	event := b.api.cgEventCreateKeyboardEvent(0, keyCode, state == Down)
+	source, err := b.eventSource()
+	if err != nil {
+		return err
+	}
+	defer b.api.cfRelease(source)
+
+	event := b.api.cgEventCreateKeyboardEvent(source, keyCode, state == Down)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateKeyboardEvent failed")
 	}
@@ -353,7 +380,13 @@ func (b *darwinBackend) postText(text string) error {
 }
 
 func (b *darwinBackend) postUnicode(units []uint16, state State) error {
-	event := b.api.cgEventCreateKeyboardEvent(0, 0, state == Down)
+	source, err := b.eventSource()
+	if err != nil {
+		return err
+	}
+	defer b.api.cfRelease(source)
+
+	event := b.api.cgEventCreateKeyboardEvent(source, 0, state == Down)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateKeyboardEvent(unicode) failed")
 	}
@@ -361,6 +394,14 @@ func (b *darwinBackend) postUnicode(units []uint16, state State) error {
 	b.api.cgEventKeyboardSetUnicodeString(event, uintptr(len(units)), &units[0])
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
+}
+
+func (b *darwinBackend) eventSource() (uintptr, error) {
+	source := b.api.cgEventSourceCreate(cgEventSourceStateHIDSystem)
+	if source == 0 {
+		return 0, errors.New("makc: CGEventSourceCreate failed")
+	}
+	return source, nil
 }
 
 func (b *darwinBackend) dragMouseButton() (uint32, bool) {
@@ -516,7 +557,13 @@ func newDarwinAPI() (*darwinAPI, error) {
 	if err := registerDarwinProc(appServices, &api.cgEventCreate, "CGEventCreate"); err != nil {
 		return nil, err
 	}
+	if err := registerDarwinProc(appServices, &api.cgEventSourceCreate, "CGEventSourceCreate"); err != nil {
+		return nil, err
+	}
 	if err := registerDarwinProc(appServices, &api.cgEventGetLocation, "CGEventGetLocation"); err != nil {
+		return nil, err
+	}
+	if err := registerDarwinProc(appServices, &api.cgEventSetIntegerValueField, "CGEventSetIntegerValueField"); err != nil {
 		return nil, err
 	}
 	if err := registerDarwinProc(appServices, &api.cgEventSourceButtonState, "CGEventSourceButtonState"); err != nil {
@@ -558,13 +605,15 @@ func registerDarwinProc(handle uintptr, fptr any, name string) error {
 type darwinAPI struct {
 	axIsProcessTrusted func() bool
 
-	cgMainDisplayID          func() uint32
-	cgDisplayPixelsWide      func(uint32) uintptr
-	cgDisplayPixelsHigh      func(uint32) uintptr
-	cgEventCreate            func(uintptr) uintptr
-	cgEventGetLocation       func(uintptr) cgPoint
-	cgEventSourceButtonState func(uint32, uint32) bool
-	cgEventSourceKeyState    func(uint32, uint16) bool
+	cgMainDisplayID             func() uint32
+	cgDisplayPixelsWide         func(uint32) uintptr
+	cgDisplayPixelsHigh         func(uint32) uintptr
+	cgEventCreate               func(uintptr) uintptr
+	cgEventSourceCreate         func(uint32) uintptr
+	cgEventGetLocation          func(uintptr) cgPoint
+	cgEventSetIntegerValueField func(uintptr, uint32, int64)
+	cgEventSourceButtonState    func(uint32, uint32) bool
+	cgEventSourceKeyState       func(uint32, uint16) bool
 
 	cgEventCreateMouseEvent         func(uintptr, uint32, cgPoint, uint32) uintptr
 	cgEventCreateScrollWheelEvent   func(uintptr, uint32, uint32, int32, ...any) uintptr
