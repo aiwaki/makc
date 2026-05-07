@@ -106,9 +106,10 @@ client, err := makc.Open(
 
 The Linux `uinput` backend is injection-focused: it supports relative mouse
 movement, mouse buttons, wheel events, mapped key events, and raw Linux key-code
-scan events. Cursor position, screen size, input state, absolute movement,
-Unicode text injection, and input listening need a separate display-server or
-evdev layer and currently return `ErrUnsupported`.
+scan events. Linux input state and listening use evdev `/dev/input/event*`
+devices. Cursor position, screen size, absolute movement, and Unicode text
+injection still need a separate display-server layer and currently return
+`ErrUnsupported`.
 
 The old cgo header, embedded DLL, and `skip_hook` submodule have been removed
 from the active codebase.
@@ -124,8 +125,9 @@ from the active codebase.
 - Keyboard state: `State`, `Down`.
 - Keyboard injection: `Press`, `Release`, `Tap`, `Combo`, `TypeText`,
   `ScanPress`, `ScanRelease`, `ScanTap`, and `Inject` batches.
-- Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook or
-  Raw Input backends, and optional injected-event reporting on Windows.
+- Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook,
+  Raw Input, or Linux evdev backends, and optional injected-event reporting on
+  Windows.
 - Own-event tagging: `SendInput` events get a per-client `dwExtraInfo` tag by
   default; `InputEvent.Own` and `InputEvent.ExtraInfo` expose that tag inside
   `makc`. `InjectMouseInput` and `InjectKeyboardInput` are sent with zero
@@ -136,6 +138,9 @@ from the active codebase.
   registration per device class per process. Raw events include
   `InputEvent.Raw`, `InputEvent.Device`, and relative `MouseInputEvent.Move`
   data when the device reports it.
+- Linux evdev listening is raw `/dev/input/event*` input. It emits relative
+  mouse moves, buttons, wheels, and mapped key events, but it does not provide
+  display-server cursor positions or injected-event markers.
 - Name parsing: `ParseKey` and `ParseMouseButton` for CLIs and config files.
 
 The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
@@ -190,8 +195,9 @@ bash scripts/parallels-linux-smoke.sh
 
 The helper builds the Linux smoke binary on the Mac, copies it through the
 Parallels shared Home folder using a temporary staging directory without spaces,
-and runs the uinput smoke suite in the guest via `prlctl exec`. Set
-`MAKC_PARALLELS_LINUX_VM` when the VM is not named `Fedora Linux (1)`.
+and runs the uinput plus evdev listener smoke suite in the guest via
+`prlctl exec`. Set `MAKC_PARALLELS_LINUX_VM` when the VM is not named
+`Fedora Linux (1)`.
 
 To allow non-root Linux uinput injection, run this inside the Linux guest and
 then log out and back in:

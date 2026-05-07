@@ -108,8 +108,12 @@ func (b *linuxBackend) CursorPos(context.Context) (Point, error) {
 	return Point{}, unsupported("linux cursor position requires a display-server backend")
 }
 
-func (b *linuxBackend) MouseButtonState(context.Context, MouseButton) (State, error) {
-	return Up, unsupported("linux mouse state requires an evdev or display-server backend")
+func (b *linuxBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
+	code, err := linuxMouseButton(button)
+	if err != nil {
+		return Up, err
+	}
+	return linuxEvdevKeyState(ctx, code)
 }
 
 func (b *linuxBackend) MoveMouse(ctx context.Context, move MouseMove) error {
@@ -165,8 +169,12 @@ func (b *linuxBackend) InjectMouse(ctx context.Context, events []MouseEvent) err
 	return nil
 }
 
-func (b *linuxBackend) KeyState(context.Context, Key) (State, error) {
-	return Up, unsupported("linux key state requires an evdev or display-server backend")
+func (b *linuxBackend) KeyState(ctx context.Context, key Key) (State, error) {
+	code, err := linuxKeyCode(key)
+	if err != nil {
+		return Up, err
+	}
+	return linuxEvdevKeyState(ctx, code)
 }
 
 func (b *linuxBackend) SetKey(ctx context.Context, key Key, state State) error {
@@ -209,8 +217,18 @@ func (b *linuxBackend) InjectKeyboard(ctx context.Context, events []KeyboardEven
 	return nil
 }
 
-func (b *linuxBackend) ListenInput(context.Context, ListenOptions) (*Listener, error) {
-	return nil, unsupported("linux input listening is not implemented")
+func (b *linuxBackend) ListenInput(ctx context.Context, opts ListenOptions) (*Listener, error) {
+	opts = normalizeListenOptions(opts)
+	switch opts.Backend {
+	case ListenBackendAuto, ListenBackendEvdev:
+		return linuxListenEvdev(ctx, opts)
+	case ListenBackendLowLevelHook:
+		return nil, unsupported("low-level hook listening is only available on Windows")
+	case ListenBackendRawInput:
+		return nil, unsupported("Raw Input listening is only available on Windows")
+	default:
+		return nil, unsupported("unknown listen backend")
+	}
 }
 
 func checkContext(ctx context.Context) error {
@@ -281,7 +299,7 @@ var linuxKeyCodes = map[Key]uint16{
 	KeyNumpad7: 71, KeyNumpad8: 72, KeyNumpad9: 73, KeySubtract: 74,
 	KeyNumpad4: 75, KeyNumpad5: 76, KeyNumpad6: 77, KeyAdd: 78,
 	KeyNumpad1: 79, KeyNumpad2: 80, KeyNumpad3: 81, KeyNumpad0: 82, KeyDecimal: 83,
-	KeyF11: 87, KeyF12: 88, KeyDivide: 98,
+	KeyF11: 87, KeyF12: 88, KeyRightControl: 97, KeyDivide: 98,
 	KeyRightAlt: 100, KeyHome: 102, KeyUp: 103, KeyPageUp: 104, KeyLeft: 105, KeyRight: 106,
 	KeyEnd: 107, KeyDown: 108, KeyPageDown: 109, KeyInsert: 110, KeyDelete: 111,
 	KeyPause: 119, KeyLeftWindows: 125, KeyRightWindows: 126, KeyApps: 127,
@@ -491,6 +509,7 @@ const (
 	linuxIOCSizeShift = 16
 	linuxIOCDirShift  = 30
 	linuxIOCWrite     = 1
+	linuxIOCRead      = 2
 
 	uiDevCreate  = ('U' << linuxIOCTypeShift) | (1 << linuxIOCNRShift)
 	uiDevDestroy = ('U' << linuxIOCTypeShift) | (2 << linuxIOCNRShift)

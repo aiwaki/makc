@@ -82,6 +82,8 @@ func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*List
 		return b.listenWithRunner(ctx, opts, b.runHookInputListener)
 	case ListenBackendRawInput:
 		return b.listenWithRunner(ctx, opts, b.runRawInputListener)
+	case ListenBackendEvdev:
+		return nil, unsupported("evdev listening is only available on Linux")
 	default:
 		return nil, unsupported("unknown listen backend")
 	}

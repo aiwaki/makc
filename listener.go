@@ -23,13 +23,12 @@ type ListenOptions struct {
 	NormalizeOwnInjected bool
 }
 
-// ListenBackend selects the Windows input listening primitive.
+// ListenBackend selects the input listening primitive.
 type ListenBackend uint8
 
 const (
-	// ListenBackendAuto uses low-level hooks. Raw Input is intentionally
-	// opt-in because Windows keeps one raw-input registration per device class
-	// per process.
+	// ListenBackendAuto uses the platform default. On Windows this uses
+	// low-level hooks. On Linux this uses evdev.
 	ListenBackendAuto ListenBackend = iota
 
 	// ListenBackendLowLevelHook uses WH_MOUSE_LL and WH_KEYBOARD_LL.
@@ -37,6 +36,9 @@ const (
 
 	// ListenBackendRawInput uses RegisterRawInputDevices and WM_INPUT.
 	ListenBackendRawInput
+
+	// ListenBackendEvdev reads Linux /dev/input/event* devices.
+	ListenBackendEvdev
 )
 
 func (b ListenBackend) String() string {
@@ -47,6 +49,8 @@ func (b ListenBackend) String() string {
 		return "hook"
 	case ListenBackendRawInput:
 		return "rawinput"
+	case ListenBackendEvdev:
+		return "evdev"
 	default:
 		return "unknown"
 	}

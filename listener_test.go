@@ -28,6 +28,7 @@ func TestListenBackendString(t *testing.T) {
 		ListenBackendAuto:         "auto",
 		ListenBackendLowLevelHook: "hook",
 		ListenBackendRawInput:     "rawinput",
+		ListenBackendEvdev:        "evdev",
 		ListenBackend(0xFF):       "unknown",
 	}
 	for backend, want := range tests {
