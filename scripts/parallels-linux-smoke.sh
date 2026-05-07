@@ -161,7 +161,7 @@ run_smoke() {
 if [[ "$#" -gt 0 ]]; then
   run_smoke "$@"
 else
-  run_smoke -backend uinput -keyboard-backend uinput
+  run_smoke -backend uinput -keyboard-backend uinput -capabilities -listen-backend evdev
 	run_smoke -backend uinput -keyboard-backend uinput -inject -dx 1 -dy 1 -tap shift
 	run_smoke -backend uinput -keyboard-backend uinput -scan 42
 	run_smoke -backend uinput -keyboard-backend uinput -wheel 1 -hwheel 1

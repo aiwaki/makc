@@ -211,7 +211,9 @@ sudo bash scripts/linux-uinput-permissions.sh "$USER"
 
 By default the smoke command opens the backend and reads current state where the
 backend supports it. Add `-inject` to perform a tiny relative mouse move, and
-`-click` to also click the left mouse button.
+`-click` to also click the left mouse button. Add `-capabilities` to print
+backend probes for relative movement, absolute movement, and listener startup
+without visible clicks or text input.
 
 For Parallels Desktop on Apple Silicon:
 
