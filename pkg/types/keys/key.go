@@ -1,4 +1,4 @@
-// Package keys keeps compatibility aliases for the pre-v2 API.
+// Package keys keeps compatibility aliases for the legacy API.
 //
 // Deprecated: import github.com/aiwaki/makc and use makc.Key constants
 // directly.

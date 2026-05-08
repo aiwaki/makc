@@ -15,17 +15,31 @@ const (
 // KeyboardEvent is one keyboard operation in a batch. Pause events are
 // interpreted by the Go layer and are not sent to the backend.
 type KeyboardEvent struct {
-	Kind     KeyboardEventKind
-	Key      Key
+	// Kind selects which payload the event carries.
+	Kind KeyboardEventKind
+
+	// Key is the virtual key payload for KeyboardEventKey.
+	Key Key
+
+	// ScanCode is the hardware scan-code payload for KeyboardEventScanCode.
 	ScanCode uint16
-	State    State
+
+	// State is the key state for key and scan-code events.
+	State State
+
+	// Extended marks scan-code events that use an extended key.
 	Extended bool
-	Text     string
+
+	// Text is the Unicode text payload for KeyboardEventText.
+	Text string
+
+	// Duration is the delay for KeyboardEventPause.
 	Duration time.Duration
 }
 
 // TypingProfile describes delays between per-rune text input events.
 type TypingProfile struct {
+	// Interval controls pauses between emitted rune events.
 	Interval IntervalProfile
 }
 

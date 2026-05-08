@@ -1,4 +1,4 @@
-// Package buttons keeps compatibility aliases for the pre-v2 API.
+// Package buttons keeps compatibility aliases for the legacy API.
 //
 // Deprecated: import github.com/aiwaki/makc and use makc.MouseButton
 // constants directly.

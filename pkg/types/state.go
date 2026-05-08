@@ -1,4 +1,4 @@
-// Package types keeps compatibility aliases for the pre-v2 API.
+// Package types keeps compatibility aliases for the legacy API.
 //
 // Deprecated: import github.com/aiwaki/makc and use makc.State,
 // makc.Point, and related root-package types directly.

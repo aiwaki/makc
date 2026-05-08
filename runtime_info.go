@@ -20,53 +20,105 @@ const (
 
 // RuntimeInfo describes the input-related runtime environment.
 type RuntimeInfo struct {
-	OS      string
-	Arch    string
+	// OS is the Go runtime operating system name.
+	OS string
+
+	// Arch is the Go runtime architecture name.
+	Arch string
+
+	// Display describes the active display/session environment.
 	Display DisplayInfo
-	Linux   LinuxRuntimeInfo
+
+	// Linux contains Linux-specific diagnostics. It is zero-valued on other
+	// platforms.
+	Linux LinuxRuntimeInfo
 }
 
 // DisplayInfo describes the active display server environment.
 type DisplayInfo struct {
-	Server         DisplayServer
-	SessionType    string
+	// Server is makc's normalized display server classification.
+	Server DisplayServer
+
+	// SessionType is the raw XDG_SESSION_TYPE value when available.
+	SessionType string
+
+	// CurrentDesktop is the raw XDG_CURRENT_DESKTOP value when available.
 	CurrentDesktop string
+
+	// DesktopSession is the raw DESKTOP_SESSION value when available.
 	DesktopSession string
-	Display        string
+
+	// Display is the raw DISPLAY value when available.
+	Display string
+
+	// WaylandDisplay is the raw WAYLAND_DISPLAY value when available.
 	WaylandDisplay string
 }
 
 // LinuxRuntimeInfo contains Linux-specific runtime diagnostics.
 type LinuxRuntimeInfo struct {
-	UInput        RuntimeDeviceInfo
-	EvdevDevices  int
-	X11           RuntimeDependency
+	// UInput describes access to /dev/uinput.
+	UInput RuntimeDeviceInfo
+
+	// EvdevDevices is the number of readable /dev/input/event* devices found.
+	EvdevDevices int
+
+	// X11 describes the optional Xlib dependency.
+	X11 RuntimeDependency
+
+	// WaylandClient describes the optional Wayland client dependency.
 	WaylandClient RuntimeDependency
-	LibEI         RuntimeDependency
-	LibOeffis     RuntimeDependency
-	Portal        RuntimePortalInfo
+
+	// LibEI describes the optional libei dependency.
+	LibEI RuntimeDependency
+
+	// LibOeffis describes the optional liboeffis dependency.
+	LibOeffis RuntimeDependency
+
+	// Portal describes session-bus signals used by desktop portal diagnostics.
+	Portal RuntimePortalInfo
 }
 
 // RuntimeDeviceInfo describes a local device path used by an input backend.
 type RuntimeDeviceInfo struct {
-	Path     string
-	Exists   bool
+	// Path is the device path that was inspected.
+	Path string
+
+	// Exists reports whether the path exists.
+	Exists bool
+
+	// Readable reports whether the process can open the path for reading.
 	Readable bool
+
+	// Writable reports whether the process can open the path for writing.
 	Writable bool
-	Error    string
+
+	// Error contains a probe error message, if any.
+	Error string
 }
 
 // RuntimeDependency describes an optional runtime library or service.
 type RuntimeDependency struct {
-	Name      string
+	// Name is the library or service name that was probed.
+	Name string
+
+	// Available reports whether the dependency is available to this process.
 	Available bool
-	Error     string
+
+	// Error contains a probe error message, if any.
+	Error string
 }
 
 // RuntimePortalInfo describes session-bus signals relevant to desktop portals.
 type RuntimePortalInfo struct {
+	// SessionBusAddress is the DBUS_SESSION_BUS_ADDRESS value when available.
 	SessionBusAddress string
-	SessionBus        bool
+
+	// SessionBus reports whether a session bus address is present.
+	SessionBus bool
+
+	// RemoteDesktopHint reports whether the environment suggests a remote
+	// desktop portal may be available.
 	RemoteDesktopHint bool
 }
 

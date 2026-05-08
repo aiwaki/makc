@@ -23,19 +23,36 @@ const (
 // MouseEvent is one mouse operation in a batch. Pause events are interpreted by
 // the Go layer and are not sent to the backend.
 type MouseEvent struct {
-	Kind     MouseEventKind
-	Move     MouseMove
-	Button   MouseButton
-	State    State
-	Delta    int
+	// Kind selects which payload the event carries.
+	Kind MouseEventKind
+
+	// Move is the movement payload for MouseEventMove.
+	Move MouseMove
+
+	// Button is the button payload for MouseEventButton.
+	Button MouseButton
+
+	// State is the button state for MouseEventButton.
+	State State
+
+	// Delta is the raw wheel delta for MouseEventWheel and MouseEventHWheel.
+	Delta int
+
+	// Duration is the delay for MouseEventPause.
 	Duration time.Duration
 }
 
 // ClickProfile describes one or more button clicks with optional hold and
 // between-click timing.
 type ClickProfile struct {
-	Count    int
-	Hold     time.Duration
+	// Count is the number of clicks to generate. Values less than one become
+	// one click.
+	Count int
+
+	// Hold is the pause between button down and button up.
+	Hold time.Duration
+
+	// Interval controls pauses between repeated clicks.
 	Interval IntervalProfile
 }
 
@@ -148,11 +165,22 @@ const (
 
 // MovementProfile describes a deterministic absolute cursor path.
 type MovementProfile struct {
-	Steps    int
+	// Steps is the number of move events to generate. Values less than one
+	// become one step.
+	Steps int
+
+	// Duration is the total movement duration distributed between steps.
 	Duration time.Duration
-	Curve    MovementCurve
-	Jitter   int
-	Seed     int64
+
+	// Curve selects how points are distributed along the path.
+	Curve MovementCurve
+
+	// Jitter is the maximum natural-path offset in pixels. Zero lets makc pick a
+	// distance-based value for MovementNatural.
+	Jitter int
+
+	// Seed makes natural paths and pauses reproducible.
+	Seed int64
 }
 
 // InstantMovement jumps to the target in one event.

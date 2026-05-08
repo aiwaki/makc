@@ -2,7 +2,10 @@ package makc
 
 // Point is a screen coordinate in pixels.
 type Point struct {
+	// X is the horizontal coordinate in pixels.
 	X int
+
+	// Y is the vertical coordinate in pixels.
 	Y int
 }
 
@@ -35,8 +38,14 @@ func (s State) valid() bool {
 
 // MouseMove describes one mouse movement operation.
 type MouseMove struct {
-	X        int
-	Y        int
+	// X is either the absolute horizontal coordinate or relative delta.
+	X int
+
+	// Y is either the absolute vertical coordinate or relative delta.
+	Y int
+
+	// Relative reports whether X and Y are deltas instead of screen
+	// coordinates.
 	Relative bool
 }
 
