@@ -12,6 +12,11 @@ if [[ -n "$gofmt_out" ]]; then
   exit 1
 fi
 
+echo "==> shell syntax"
+while IFS= read -r script; do
+  bash -n "$script"
+done < <(find scripts -name '*.sh' -print | sort)
+
 echo "==> go test"
 go test ./...
 
