@@ -201,9 +201,19 @@ bash scripts/parallels-linux-smoke.sh
 
 The helper builds the Linux smoke binary on the Mac, copies it through the
 Parallels shared Home folder using a temporary staging directory without spaces,
-and runs the uinput plus evdev listener smoke suite in the guest via
-`prlctl exec`. Set `MAKC_PARALLELS_LINUX_VM` when the VM is not named
-`Fedora Linux (1)`.
+discovers the active Linux GUI session environment, and runs the uinput plus
+evdev listener smoke suite in the guest via `prlctl exec`. Set
+`MAKC_PARALLELS_LINUX_VM` when the VM is not named `Fedora Linux (1)`. Set
+`MAKC_PARALLELS_LINUX_SESSION_DISCOVERY=0` to skip the GUI-session discovery
+diagnostic.
+
+Inside a Linux guest, `scripts/linux-session-env.sh` prints the active
+`loginctl` GUI session plus the discovered `DISPLAY`, `WAYLAND_DISPLAY`, and
+session bus environment. Use `--exec` to run a command with that environment:
+
+```sh
+bash scripts/linux-session-env.sh --exec ./dist/makc-smoke-linux -runtime-info
+```
 
 To allow non-root Linux uinput injection, run this inside the Linux guest and
 then log out and back in:

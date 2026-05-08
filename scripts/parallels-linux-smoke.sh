@@ -105,6 +105,7 @@ if [[ -L "$host_stage" ]]; then
   rm -f "$host_stage"
 fi
 mkdir -p "$host_stage/dist"
+mkdir -p "$host_stage/scripts"
 guest_repo="/media/psf/Home/$host_stage_name"
 
 repo_visible=0
@@ -140,9 +141,12 @@ fi
 
 host_exe="$host_stage/dist/makc-smoke-linux-$goarch"
 guest_exe="$guest_repo/dist/makc-smoke-linux-$goarch"
+guest_session_env="$guest_repo/scripts/linux-session-env.sh"
 
 echo "==> build linux/$goarch smoke binary"
 GOOS=linux GOARCH="$goarch" go build -o "$host_exe" "$repo/cmd/makc-smoke"
+cp "$repo/scripts/linux-session-env.sh" "$host_stage/scripts/linux-session-env.sh"
+chmod 755 "$host_stage/scripts/linux-session-env.sh"
 
 echo "==> prepare /dev/uinput"
 run_guest root modprobe uinput || true
@@ -152,6 +156,16 @@ run_guest root ls -l /dev/uinput
 echo "==> copy smoke binary into guest /tmp"
 run_guest "$run_user" cp "$guest_exe" /tmp/makc-smoke
 run_guest "$run_user" chmod 755 /tmp/makc-smoke
+
+if [[ "${MAKC_PARALLELS_LINUX_SESSION_DISCOVERY:-1}" != "0" ]]; then
+  echo "==> discover active Linux GUI session"
+  if ! run_guest current bash "$guest_session_env"; then
+    echo "Linux GUI session discovery failed; continuing with headless smoke" >&2
+  else
+    echo "==> /tmp/makc-smoke -runtime-info with discovered session environment"
+    run_guest current bash "$guest_session_env" --exec /tmp/makc-smoke -runtime-info || true
+  fi
+fi
 
 run_smoke() {
   echo "==> /tmp/makc-smoke $*"
