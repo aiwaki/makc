@@ -81,6 +81,15 @@ func main() {
 	if err := client.Mouse.Inject(ctx, balanced.DoubleClickEvents(makc.ButtonLeft)...); err != nil {
 		log.Fatal(err)
 	}
+
+	sequence := makc.NewInputSequence(
+		makc.MoveStep(makc.Rel(20, 0)),
+		makc.ClickStep(makc.ButtonLeft, balanced.Click),
+		makc.TextStep(" sequence", balanced.Typing),
+	)
+	if err := client.Run(ctx, sequence); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
@@ -140,6 +149,10 @@ from the active codebase.
   `MultiClick`, `DoubleClick`, `FixedInterval`, and `VariableInterval`.
 - Reusable input presets: `InputProfile`, `InstantInputProfile`,
   `FastInputProfile`, `BalancedInputProfile`, and `CarefulInputProfile`.
+- Mixed input sequences: `InputSequence`, `InputStep`, `NewInputSequence`,
+  `MouseStep`, `KeyboardStep`, `PauseStep`, `MoveStep`, `ClickStep`,
+  `DoubleClickStep`, `KeyTapStep`, `ComboStep`, `TextStep`, `Client.Run`, and
+  `Client.RunSteps`.
 - Keyboard state: `State`, `Down`.
 - Keyboard injection: `Press`, `Release`, `Tap`, `TapWithHold`, `Combo`,
   `TypeText`, `TypeTextWithProfile`, `ScanPress`, `ScanRelease`, `ScanTap`, and
