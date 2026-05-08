@@ -141,10 +141,13 @@ fi
 
 host_exe="$host_stage/dist/makc-smoke-linux-$goarch"
 guest_exe="$guest_repo/dist/makc-smoke-linux-$goarch"
+host_portal_exe="$host_stage/dist/makc-portal-handshake-linux-$goarch"
+guest_portal_exe="$guest_repo/dist/makc-portal-handshake-linux-$goarch"
 guest_session_env="$guest_repo/scripts/linux-session-env.sh"
 
 echo "==> build linux/$goarch smoke binary"
 GOOS=linux GOARCH="$goarch" go build -o "$host_exe" "$repo/cmd/makc-smoke"
+GOOS=linux GOARCH="$goarch" go build -o "$host_portal_exe" "$repo/cmd/makc-portal-handshake"
 cp "$repo/scripts/linux-session-env.sh" "$host_stage/scripts/linux-session-env.sh"
 cp "$repo/scripts/linux-portal-info.sh" "$host_stage/scripts/linux-portal-info.sh"
 chmod 755 "$host_stage/scripts/linux-session-env.sh"
@@ -158,6 +161,8 @@ run_guest root ls -l /dev/uinput
 echo "==> copy smoke binary into guest /tmp"
 run_guest "$run_user" cp "$guest_exe" /tmp/makc-smoke
 run_guest "$run_user" chmod 755 /tmp/makc-smoke
+run_guest "$run_user" cp "$guest_portal_exe" /tmp/makc-portal-handshake
+run_guest "$run_user" chmod 755 /tmp/makc-portal-handshake
 
 if [[ "${MAKC_PARALLELS_LINUX_SESSION_DISCOVERY:-1}" != "0" ]]; then
   echo "==> discover active Linux GUI session"
@@ -168,6 +173,8 @@ if [[ "${MAKC_PARALLELS_LINUX_SESSION_DISCOVERY:-1}" != "0" ]]; then
     run_guest current bash "$guest_session_env" --exec /tmp/makc-smoke -runtime-info || true
     echo "==> XDG Desktop Portal RemoteDesktop info"
     run_guest current bash "$guest_session_env" --exec bash "$guest_repo/scripts/linux-portal-info.sh" || true
+    echo "==> XDG Desktop Portal RemoteDesktop CreateSession handshake"
+    run_guest current bash "$guest_session_env" --exec /tmp/makc-portal-handshake || true
   fi
 fi
 

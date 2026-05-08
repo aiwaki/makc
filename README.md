@@ -225,6 +225,18 @@ permissions:
 bash scripts/linux-session-env.sh --exec bash scripts/linux-portal-info.sh
 ```
 
+`cmd/makc-portal-handshake` is a Linux-only diagnostic command for the first
+stateful portal handshake. Its default mode attempts to create a transient
+`RemoteDesktop` portal session and closes any returned session handle; it does
+not call `Start`, does not request permissions, and does not inject input. Pass
+`-select-devices` to test `SelectDevices`; pass `-start` only when you are ready
+for the desktop permission prompt:
+
+```sh
+GOOS=linux GOARCH=arm64 go build -o dist/makc-portal-handshake-linux-arm64 ./cmd/makc-portal-handshake
+bash scripts/linux-session-env.sh --exec ./dist/makc-portal-handshake-linux-arm64
+```
+
 To allow non-root Linux uinput injection, run this inside the Linux guest and
 then log out and back in:
 
