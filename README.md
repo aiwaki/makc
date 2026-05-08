@@ -214,6 +214,15 @@ Build a Linux ARM64 smoke binary:
 GOOS=linux GOARCH=arm64 go build -o dist/makc-smoke-linux-arm64 ./cmd/makc-smoke
 ```
 
+Run the sequence example without clicks or text:
+
+```sh
+go run ./examples/sequence
+```
+
+Pass `-click` or `-text "hello"` when you intentionally want the example to
+send those events.
+
 On a Linux desktop or VM with Go installed, run the uinput smoke helper:
 
 ```sh
