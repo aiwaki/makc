@@ -1,6 +1,9 @@
 package makc
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Keyboard exposes keyboard state and injection operations.
 type Keyboard struct {
@@ -44,6 +47,12 @@ func (k *Keyboard) Tap(ctx context.Context, key Key) error {
 	return k.Inject(ctx, KeyTapEvents(key)...)
 }
 
+// TapWithHold injects a key-down event, waits for hold, and then injects a
+// key-up event.
+func (k *Keyboard) TapWithHold(ctx context.Context, key Key, hold time.Duration) error {
+	return k.Inject(ctx, KeyTapEventsWithHold(key, hold)...)
+}
+
 // Combo presses keys in order and releases them in reverse order.
 func (k *Keyboard) Combo(ctx context.Context, keys ...Key) error {
 	return k.Inject(ctx, ComboEvents(keys...)...)
@@ -53,6 +62,12 @@ func (k *Keyboard) Combo(ctx context.Context, keys ...Key) error {
 // layout for the characters it can represent as UTF-16.
 func (k *Keyboard) TypeText(ctx context.Context, text string) error {
 	return k.Inject(ctx, TextEvent(text))
+}
+
+// TypeTextWithProfile injects Unicode text as per-rune events with profile
+// timing between runes.
+func (k *Keyboard) TypeTextWithProfile(ctx context.Context, text string, profile TypingProfile) error {
+	return k.Inject(ctx, profile.Events(text)...)
 }
 
 // ScanPress injects a scan-code key-down event.

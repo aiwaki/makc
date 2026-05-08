@@ -81,6 +81,17 @@ func (m *Mouse) Click(ctx context.Context, button MouseButton) error {
 	)
 }
 
+// ClickWithProfile injects one or more clicks using explicit hold and
+// between-click timing.
+func (m *Mouse) ClickWithProfile(ctx context.Context, button MouseButton, profile ClickProfile) error {
+	return m.Inject(ctx, profile.Events(button)...)
+}
+
+// DoubleClick injects two clicks with a fixed interval between them.
+func (m *Mouse) DoubleClick(ctx context.Context, button MouseButton, hold, interval time.Duration) error {
+	return m.ClickWithProfile(ctx, button, DoubleClick(hold, interval))
+}
+
 // Wheel injects vertical wheel movement in detents.
 func (m *Mouse) Wheel(ctx context.Context, detents int) error {
 	return m.Inject(ctx, MouseWheelEvent(detents*WheelDelta))

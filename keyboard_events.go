@@ -24,6 +24,46 @@ type KeyboardEvent struct {
 	Duration time.Duration
 }
 
+// TypingProfile describes delays between per-rune text input events.
+type TypingProfile struct {
+	Interval IntervalProfile
+}
+
+// InstantTyping emits text without explicit pauses.
+var InstantTyping = TypingProfile{}
+
+// FixedTyping creates a typing profile with one fixed delay between runes.
+func FixedTyping(delay time.Duration) TypingProfile {
+	return TypingProfile{
+		Interval: FixedInterval(delay),
+	}
+}
+
+// VariableTyping creates a seeded typing profile with delays in [min, max].
+func VariableTyping(min, max time.Duration, seed int64) TypingProfile {
+	return TypingProfile{
+		Interval: VariableInterval(min, max, seed),
+	}
+}
+
+// Events returns per-rune text events with optional pauses between runes.
+func (p TypingProfile) Events(text string) []KeyboardEvent {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+
+	intervals := p.Interval.Durations(len(runes) - 1)
+	events := make([]KeyboardEvent, 0, len(runes)*2)
+	for i, r := range runes {
+		events = append(events, TextEvent(string(r)))
+		if i < len(intervals) && intervals[i] > 0 {
+			events = append(events, KeyboardPauseEvent(intervals[i]))
+		}
+	}
+	return events
+}
+
 // KeyEvent creates a virtual-key event.
 func KeyEvent(key Key, state State) KeyboardEvent {
 	return KeyboardEvent{
@@ -73,6 +113,19 @@ func KeyboardPauseEvent(duration time.Duration) KeyboardEvent {
 func KeyTapEvents(key Key) []KeyboardEvent {
 	return []KeyboardEvent{
 		KeyDownEvent(key),
+		KeyUpEvent(key),
+	}
+}
+
+// KeyTapEventsWithHold creates key-down and key-up events separated by a hold
+// pause.
+func KeyTapEventsWithHold(key Key, hold time.Duration) []KeyboardEvent {
+	if hold <= 0 {
+		return KeyTapEvents(key)
+	}
+	return []KeyboardEvent{
+		KeyDownEvent(key),
+		KeyboardPauseEvent(hold),
 		KeyUpEvent(key),
 	}
 }

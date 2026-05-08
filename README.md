@@ -56,6 +56,9 @@ func main() {
 	if err := client.Keyboard.TypeText(ctx, "makc"); err != nil {
 		log.Fatal(err)
 	}
+	if err := client.Keyboard.TypeTextWithProfile(ctx, " v2", makc.VariableTyping(35*time.Millisecond, 90*time.Millisecond, 42)); err != nil {
+		log.Fatal(err)
+	}
 
 	listener, err := client.Listen(ctx, makc.ListenOptions{Mask: makc.ListenAll})
 	if err == nil {
@@ -66,6 +69,9 @@ func main() {
 
 	profile := makc.EaseInOutMovement(12, 180*time.Millisecond)
 	if err := client.Mouse.DragBy(ctx, makc.ButtonLeft, 80, 40, profile); err != nil {
+		log.Fatal(err)
+	}
+	if err := client.Mouse.ClickWithProfile(ctx, makc.ButtonLeft, makc.DoubleClick(30*time.Millisecond, 120*time.Millisecond)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -119,13 +125,18 @@ from the active codebase.
 
 - Mouse state: `Position`, `ScreenSize`, `State`, `Down`.
 - Mouse injection: `Move`, `MoveTo`, `MoveBy`, `Press`, `Release`, `Click`,
-  `Wheel`, `HWheel`, and `Inject` batches.
+  `ClickWithProfile`, `DoubleClick`, `Wheel`, `HWheel`, and `Inject` batches.
 - Deterministic and seeded mouse paths: `InstantMovement`, `LinearMovement`,
   `EaseInOutMovement`, `NaturalMovement`, `NaturalMovementWithJitter`,
   `MoveToProfile`, `Drag`, `DragFrom`, and `DragBy`.
+- Mouse click timing: `ClickProfile`, `InstantClick`, `ClickWithHold`,
+  `MultiClick`, `DoubleClick`, `FixedInterval`, and `VariableInterval`.
 - Keyboard state: `State`, `Down`.
-- Keyboard injection: `Press`, `Release`, `Tap`, `Combo`, `TypeText`,
-  `ScanPress`, `ScanRelease`, `ScanTap`, and `Inject` batches.
+- Keyboard injection: `Press`, `Release`, `Tap`, `TapWithHold`, `Combo`,
+  `TypeText`, `TypeTextWithProfile`, `ScanPress`, `ScanRelease`, `ScanTap`, and
+  `Inject` batches.
+- Keyboard timing: `TypingProfile`, `InstantTyping`, `FixedTyping`, and
+  `VariableTyping`.
 - Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook,
   Raw Input, or Linux evdev backends, and optional injected-event reporting on
   Windows.
@@ -265,6 +276,9 @@ diagnostics without opening an input backend. Add `-inject` to perform a tiny
 relative mouse move, and `-click` to also click the left mouse button. Add
 `-capabilities` to print backend probes for relative movement, absolute
 movement, and listener startup without visible clicks or text input.
+Timing flags such as `-tap-hold`, `-click-hold`, `-click-count`,
+`-click-interval`, `-type-profile fixed`, and `-type-profile variable` exercise
+the higher-level cadence helpers.
 
 For Parallels Desktop on Apple Silicon:
 
