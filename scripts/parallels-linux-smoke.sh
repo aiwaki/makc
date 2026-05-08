@@ -146,7 +146,9 @@ guest_session_env="$guest_repo/scripts/linux-session-env.sh"
 echo "==> build linux/$goarch smoke binary"
 GOOS=linux GOARCH="$goarch" go build -o "$host_exe" "$repo/cmd/makc-smoke"
 cp "$repo/scripts/linux-session-env.sh" "$host_stage/scripts/linux-session-env.sh"
+cp "$repo/scripts/linux-portal-info.sh" "$host_stage/scripts/linux-portal-info.sh"
 chmod 755 "$host_stage/scripts/linux-session-env.sh"
+chmod 755 "$host_stage/scripts/linux-portal-info.sh"
 
 echo "==> prepare /dev/uinput"
 run_guest root modprobe uinput || true
@@ -164,6 +166,8 @@ if [[ "${MAKC_PARALLELS_LINUX_SESSION_DISCOVERY:-1}" != "0" ]]; then
   else
     echo "==> /tmp/makc-smoke -runtime-info with discovered session environment"
     run_guest current bash "$guest_session_env" --exec /tmp/makc-smoke -runtime-info || true
+    echo "==> XDG Desktop Portal RemoteDesktop info"
+    run_guest current bash "$guest_session_env" --exec bash "$guest_repo/scripts/linux-portal-info.sh" || true
   fi
 fi
 

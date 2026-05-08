@@ -215,6 +215,16 @@ session bus environment. Use `--exec` to run a command with that environment:
 bash scripts/linux-session-env.sh --exec ./dist/makc-smoke-linux -runtime-info
 ```
 
+`scripts/linux-portal-info.sh` prints read-only XDG Desktop Portal
+`RemoteDesktop` diagnostics for the current session bus, including the portal
+version and advertised keyboard, pointer, and touchscreen support. It only
+reads D-Bus properties; it does not create a portal session or request
+permissions:
+
+```sh
+bash scripts/linux-session-env.sh --exec bash scripts/linux-portal-info.sh
+```
+
 To allow non-root Linux uinput injection, run this inside the Linux guest and
 then log out and back in:
 
