@@ -144,14 +144,17 @@ guest_exe="$guest_repo/dist/makc-smoke-linux-$goarch"
 host_portal_exe="$host_stage/dist/makc-portal-handshake-linux-$goarch"
 guest_portal_exe="$guest_repo/dist/makc-portal-handshake-linux-$goarch"
 guest_session_env="$guest_repo/scripts/linux-session-env.sh"
+guest_gnome_remote_desktop_info="$guest_repo/scripts/linux-gnome-remote-desktop-info.sh"
 
 echo "==> build linux/$goarch smoke binary"
 GOOS=linux GOARCH="$goarch" go build -o "$host_exe" "$repo/cmd/makc-smoke"
 GOOS=linux GOARCH="$goarch" go build -o "$host_portal_exe" "$repo/cmd/makc-portal-handshake"
 cp "$repo/scripts/linux-session-env.sh" "$host_stage/scripts/linux-session-env.sh"
 cp "$repo/scripts/linux-portal-info.sh" "$host_stage/scripts/linux-portal-info.sh"
+cp "$repo/scripts/linux-gnome-remote-desktop-info.sh" "$host_stage/scripts/linux-gnome-remote-desktop-info.sh"
 chmod 755 "$host_stage/scripts/linux-session-env.sh"
 chmod 755 "$host_stage/scripts/linux-portal-info.sh"
+chmod 755 "$host_stage/scripts/linux-gnome-remote-desktop-info.sh"
 
 echo "==> prepare /dev/uinput"
 run_guest root modprobe uinput || true
@@ -175,6 +178,10 @@ if [[ "${MAKC_PARALLELS_LINUX_SESSION_DISCOVERY:-1}" != "0" ]]; then
     run_guest current bash "$guest_session_env" --exec bash "$guest_repo/scripts/linux-portal-info.sh" || true
     echo "==> XDG Desktop Portal RemoteDesktop CreateSession handshake"
     run_guest current bash "$guest_session_env" --exec /tmp/makc-portal-handshake || true
+    if [[ "${MAKC_PARALLELS_LINUX_GNOME_REMOTE_DESKTOP_INFO:-1}" != "0" ]]; then
+      echo "==> GNOME RemoteDesktop/Mutter info"
+      run_guest current bash "$guest_session_env" --exec bash "$guest_gnome_remote_desktop_info" || true
+    fi
   fi
 fi
 

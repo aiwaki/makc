@@ -208,8 +208,9 @@ evdev listener smoke suite in the guest via `prlctl exec`. Set
 diagnostic.
 
 Inside a Linux guest, `scripts/linux-session-env.sh` prints the active
-`loginctl` GUI session plus the discovered `DISPLAY`, `WAYLAND_DISPLAY`, and
-session bus environment. Use `--exec` to run a command with that environment:
+`loginctl` GUI session plus the discovered `DISPLAY`, `WAYLAND_DISPLAY`,
+`XDG_SESSION_ID`, and session bus environment. Use `--exec` to run a command
+with that environment:
 
 ```sh
 bash scripts/linux-session-env.sh --exec ./dist/makc-smoke-linux -runtime-info
@@ -223,6 +224,18 @@ permissions:
 
 ```sh
 bash scripts/linux-session-env.sh --exec bash scripts/linux-portal-info.sh
+```
+
+On GNOME/Wayland, `scripts/linux-gnome-remote-desktop-info.sh` adds a
+read-only Mutter-side diagnostic pass. It reports the active `loginctl` session
+state, `LockedHint`/`IdleHint`, `org.gnome.Mutter.RemoteDesktop` availability,
+Remote Desktop gsettings, the `gnome-remote-desktop.service` user-unit state,
+and recent matching journal lines. This is useful when the portal handshake
+returns response code `2` and the desktop log says `Session creation
+inhibited`:
+
+```sh
+bash scripts/linux-session-env.sh --exec bash scripts/linux-gnome-remote-desktop-info.sh
 ```
 
 `cmd/makc-portal-handshake` is a Linux-only diagnostic command for the first

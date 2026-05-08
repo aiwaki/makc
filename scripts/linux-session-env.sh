@@ -121,7 +121,7 @@ read_proc_env() {
   [[ -n "$pid" && -r "/proc/$pid/environ" ]] || return 0
   while IFS='=' read -r key value; do
     case "$key" in
-      DISPLAY|WAYLAND_DISPLAY|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_RUNTIME_DIR|DESKTOP_SESSION|DBUS_SESSION_BUS_ADDRESS)
+      DISPLAY|WAYLAND_DISPLAY|XDG_SESSION_ID|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_RUNTIME_DIR|DESKTOP_SESSION|DBUS_SESSION_BUS_ADDRESS)
         set_env "$key" "$value"
         ;;
     esac
@@ -149,6 +149,7 @@ while read -r pid; do
   read_pid_once "$pid"
 done < <(add_pids_by_pattern '(^|/)(gnome-session|gnome-shell|kwin_wayland|plasmashell|Xorg|Xwayland|xdg-desktop-portal|dbus-daemon|dbus-broker)( |$)')
 
+env_map["XDG_SESSION_ID"]="$session_id"
 if [[ -n "$session_type" && "$session_type" != "unspecified" ]]; then
   set_env XDG_SESSION_TYPE "$session_type"
 fi
@@ -176,7 +177,7 @@ fi
 
 emit_shell() {
   local key
-  for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
+  for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_ID XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
     [[ -n "${env_map[$key]:-}" ]] || continue
     printf 'export %s=%q\n' "$key" "${env_map[$key]}"
   done
@@ -188,7 +189,7 @@ case "$mode" in
     ;;
   exec)
     env_args=()
-    for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
+    for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_ID XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
       [[ -n "${env_map[$key]:-}" ]] || continue
       env_args+=("$key=${env_map[$key]}")
     done
@@ -204,7 +205,7 @@ case "$mode" in
     echo "session_leader=$session_leader"
     echo "session_service=$session_service"
     [[ -n "$session_desktop" ]] && echo "session_desktop=$session_desktop"
-    for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
+    for key in DISPLAY WAYLAND_DISPLAY XDG_SESSION_ID XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DESKTOP_SESSION DBUS_SESSION_BUS_ADDRESS; do
       [[ -n "${env_map[$key]:-}" ]] || continue
       echo "env_$key=${env_map[$key]}"
     done
