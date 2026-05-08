@@ -86,6 +86,8 @@ The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
 kept as deprecated compatibility aliases. New code should import the root
 `github.com/aiwaki/makc` package directly.
 
+Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+
 ## Backends
 
 `MouseInjectionAuto` and `KeyboardInjectionAuto` select the preferred backend
