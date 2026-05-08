@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 for tagged releases.
 
+## [0.1.1] - 2026-05-09
+
+Public repository hardening release.
+
+### Changed
+
+- Removed generated assistant/ECC files from the public module tree.
+- Added `CONTRIBUTING.md`, `SECURITY.md`, issue templates, and a pull request
+  template.
+- Updated `.gitignore` to keep local assistant workspaces out of the public Go
+  module.
+- Updated `LICENSE` with the current maintainer copyright line.
+
+### Repository
+
+- Enabled GitHub Issues.
+- Enabled GitHub secret scanning and push protection where available.
+
 ## [0.1.0] - 2026-05-09
 
 Initial public rewrite release.
