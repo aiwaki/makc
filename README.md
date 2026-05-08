@@ -129,6 +129,9 @@ from the active codebase.
 - Input listener: `Client.Listen` with mouse/keyboard masks, low-level hook,
   Raw Input, or Linux evdev backends, and optional injected-event reporting on
   Windows.
+- Runtime diagnostics: `InspectRuntime` and `Client.RuntimeInfo` expose the
+  visible display stack plus Linux `/dev/uinput`, evdev, X11, Wayland, libei,
+  liboeffis, and portal hints.
 - Own-event tagging: `SendInput` events get a per-client `dwExtraInfo` tag by
   default; `InputEvent.Own` and `InputEvent.ExtraInfo` expose that tag inside
   `makc`. `InjectMouseInput` and `InjectKeyboardInput` are sent with zero
@@ -210,10 +213,11 @@ sudo bash scripts/linux-uinput-permissions.sh "$USER"
 ```
 
 By default the smoke command opens the backend and reads current state where the
-backend supports it. Add `-inject` to perform a tiny relative mouse move, and
-`-click` to also click the left mouse button. Add `-capabilities` to print
-backend probes for relative movement, absolute movement, and listener startup
-without visible clicks or text input.
+backend supports it. Add `-runtime-info` to print display and Linux dependency
+diagnostics without opening an input backend. Add `-inject` to perform a tiny
+relative mouse move, and `-click` to also click the left mouse button. Add
+`-capabilities` to print backend probes for relative movement, absolute
+movement, and listener startup without visible clicks or text input.
 
 For Parallels Desktop on Apple Silicon:
 

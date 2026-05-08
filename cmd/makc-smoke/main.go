@@ -26,6 +26,7 @@ func main() {
 	var scanExtended bool
 	var listen bool
 	var capabilities bool
+	var runtimeInfoOnly bool
 	var listenCount int
 	var includeInjected bool
 	var normalizeOwnInjected bool
@@ -56,6 +57,7 @@ func main() {
 	flag.BoolVar(&scanExtended, "scan-extended", false, "mark -scan as an extended key")
 	flag.BoolVar(&listen, "listen", false, "listen for low-level mouse and keyboard events")
 	flag.BoolVar(&capabilities, "capabilities", false, "probe backend capabilities without visible clicks or text input")
+	flag.BoolVar(&runtimeInfoOnly, "runtime-info", false, "print runtime diagnostics without opening an input backend")
 	flag.IntVar(&listenCount, "listen-count", 4, "number of events to print before stopping")
 	flag.BoolVar(&includeInjected, "include-injected", false, "include injected events in listener output")
 	flag.BoolVar(&normalizeOwnInjected, "normalize-own-injected", false, "clear injected markers in makc output for events tagged by this client")
@@ -74,6 +76,13 @@ func main() {
 	flag.IntVar(&dy, "dy", 1, "relative Y movement used with -inject")
 	flag.DurationVar(&wait, "wait", 100*time.Millisecond, "delay before reading position after injection")
 	flag.Parse()
+
+	runtimeInfo := makc.InspectRuntime()
+	if runtimeInfoOnly {
+		fmt.Printf("runtime=%s/%s\n", runtimeInfo.OS, runtimeInfo.Arch)
+		printRuntimeInfo(runtimeInfo)
+		return
+	}
 
 	backend, err := parseBackend(backendName)
 	if err != nil {
@@ -118,6 +127,9 @@ func main() {
 	fmt.Printf("mouse_injection=%s\n", client.Mouse.InjectionBackend())
 	fmt.Printf("keyboard_injection=%s\n", client.Keyboard.InjectionBackend())
 	fmt.Printf("input_tag=0x%X\n", client.InputTag())
+	if capabilities {
+		printRuntimeInfo(runtimeInfo)
+	}
 
 	pos, hasPos := readPoint("position", func() (makc.Point, error) {
 		return client.Mouse.Position(ctx)
@@ -257,6 +269,51 @@ func readBool(name string, read func() (bool, error)) bool {
 	}
 	fmt.Printf("%s=%v\n", name, value)
 	return true
+}
+
+func printRuntimeInfo(info makc.RuntimeInfo) {
+	fmt.Printf("display_server=%s\n", info.Display.Server)
+	if info.Display.SessionType != "" {
+		fmt.Printf("display_session_type=%s\n", info.Display.SessionType)
+	}
+	if info.Display.CurrentDesktop != "" {
+		fmt.Printf("display_current_desktop=%s\n", info.Display.CurrentDesktop)
+	}
+	if info.Display.DesktopSession != "" {
+		fmt.Printf("display_desktop_session=%s\n", info.Display.DesktopSession)
+	}
+	if info.Display.Display != "" {
+		fmt.Printf("display_x11=%s\n", info.Display.Display)
+	}
+	if info.Display.WaylandDisplay != "" {
+		fmt.Printf("display_wayland=%s\n", info.Display.WaylandDisplay)
+	}
+	if info.OS != "linux" {
+		return
+	}
+	fmt.Printf("linux_uinput_exists=%v\n", info.Linux.UInput.Exists)
+	fmt.Printf("linux_uinput_readable=%v\n", info.Linux.UInput.Readable)
+	fmt.Printf("linux_uinput_writable=%v\n", info.Linux.UInput.Writable)
+	if info.Linux.UInput.Error != "" {
+		fmt.Printf("linux_uinput_error=%s\n", info.Linux.UInput.Error)
+	}
+	fmt.Printf("linux_evdev_devices=%d\n", info.Linux.EvdevDevices)
+	printDependency("linux_lib_x11", info.Linux.X11)
+	printDependency("linux_lib_wayland_client", info.Linux.WaylandClient)
+	printDependency("linux_lib_libei", info.Linux.LibEI)
+	printDependency("linux_lib_oeffis", info.Linux.LibOeffis)
+	fmt.Printf("linux_portal_session_bus=%v\n", info.Linux.Portal.SessionBus)
+	fmt.Printf("linux_portal_remote_desktop_hint=%v\n", info.Linux.Portal.RemoteDesktopHint)
+}
+
+func printDependency(name string, dep makc.RuntimeDependency) {
+	fmt.Printf("%s_available=%v\n", name, dep.Available)
+	if dep.Name != "" {
+		fmt.Printf("%s_name=%s\n", name, dep.Name)
+	}
+	if dep.Error != "" {
+		fmt.Printf("%s_error=%s\n", name, dep.Error)
+	}
 }
 
 func runCapabilitySmoke(
