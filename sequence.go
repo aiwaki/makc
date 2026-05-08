@@ -18,14 +18,22 @@ const (
 // InputStep is one executable sequence step. Mouse and keyboard steps may
 // contain pause events; they are executed by the corresponding device API.
 type InputStep struct {
-	Kind     InputStepKind
-	Mouse    []MouseEvent
+	// Kind selects which payload the step executes.
+	Kind InputStepKind
+
+	// Mouse contains events for InputStepMouse.
+	Mouse []MouseEvent
+
+	// Keyboard contains events for InputStepKeyboard.
 	Keyboard []KeyboardEvent
+
+	// Duration is the delay for InputStepPause.
 	Duration time.Duration
 }
 
 // InputSequence is an ordered, cancelable list of input steps.
 type InputSequence struct {
+	// Steps is the ordered list of operations run by Client.Run.
 	Steps []InputStep
 }
 

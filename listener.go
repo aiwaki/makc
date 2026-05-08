@@ -16,10 +16,21 @@ const (
 
 // ListenOptions configures input listening.
 type ListenOptions struct {
-	Backend              ListenBackend
-	Mask                 ListenMask
-	Buffer               int
-	IncludeInjected      bool
+	// Backend selects the listening primitive. Zero uses the platform default.
+	Backend ListenBackend
+
+	// Mask selects which input families should be emitted. Zero means ListenAll.
+	Mask ListenMask
+
+	// Buffer sets the Events channel capacity. Values less than one use the
+	// package default.
+	Buffer int
+
+	// IncludeInjected includes events that the backend reports as injected.
+	IncludeInjected bool
+
+	// NormalizeOwnInjected clears injected markers from events tagged as this
+	// client's own input before filtering.
 	NormalizeOwnInjected bool
 }
 
@@ -69,38 +80,78 @@ const (
 
 // InputEvent is emitted by Listener.Events.
 type InputEvent struct {
-	Kind                   InputEventKind
-	Time                   time.Time
-	Injected               bool
+	// Kind identifies the event payload and operation.
+	Kind InputEventKind
+
+	// Time is when makc observed the event.
+	Time time.Time
+
+	// Injected reports whether the platform marked the event as injected.
+	Injected bool
+
+	// LowerIntegrityInjected reports the Windows lower-integrity injected
+	// marker when available.
 	LowerIntegrityInjected bool
-	Own                    bool
-	Raw                    bool
-	Device                 uintptr
-	ExtraInfo              uintptr
-	Mouse                  MouseInputEvent
-	Keyboard               KeyboardInputEvent
+
+	// Own reports whether the event matches this client's input tag where the
+	// backend supports tagging.
+	Own bool
+
+	// Raw reports whether the event came from a raw input stream.
+	Raw bool
+
+	// Device is a backend-specific device handle or identifier.
+	Device uintptr
+
+	// ExtraInfo is backend-specific event metadata, such as Win32 dwExtraInfo.
+	ExtraInfo uintptr
+
+	// Mouse contains mouse event details when Kind is a mouse event.
+	Mouse MouseInputEvent
+
+	// Keyboard contains keyboard event details when Kind is InputEventKey.
+	Keyboard KeyboardInputEvent
 }
 
 // MouseInputEvent contains listened mouse event data.
 type MouseInputEvent struct {
+	// Position is the absolute cursor position reported with the event.
 	Position Point
-	Move     MouseMove
-	Button   MouseButton
-	State    State
-	Delta    int
+
+	// Move is the movement payload for mouse move events.
+	Move MouseMove
+
+	// Button is the button payload for button events.
+	Button MouseButton
+
+	// State is the button state for button events.
+	State State
+
+	// Delta is the raw wheel delta for wheel events.
+	Delta int
 }
 
 // KeyboardInputEvent contains listened keyboard event data.
 type KeyboardInputEvent struct {
-	Key      Key
+	// Key is the virtual key for keyboard events when known.
+	Key Key
+
+	// ScanCode is the hardware scan code reported by the backend when known.
 	ScanCode uint16
-	State    State
+
+	// State is the key state for key events.
+	State State
+
+	// Extended reports whether the backend marked the key as extended.
 	Extended bool
-	AltDown  bool
+
+	// AltDown reports whether Alt was down during the key event.
+	AltDown bool
 }
 
 // Listener owns an active input listener.
 type Listener struct {
+	// Events receives listened input events until the listener stops.
 	Events <-chan InputEvent
 
 	done   <-chan error

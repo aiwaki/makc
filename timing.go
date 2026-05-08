@@ -7,8 +7,13 @@ import (
 
 // IntervalProfile generates deterministic delays between input events.
 type IntervalProfile struct {
-	Min  time.Duration
-	Max  time.Duration
+	// Min is the lower bound for generated delays.
+	Min time.Duration
+
+	// Max is the upper bound for generated delays.
+	Max time.Duration
+
+	// Seed makes variable delays reproducible.
 	Seed int64
 }
 

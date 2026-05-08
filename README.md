@@ -6,8 +6,8 @@ Linux.
 It is pronounced `mak-see`, like `Maksim` without the final `m`. The name is
 also a compact acronym for **Mouse And Keyboard Control**.
 
-The v2 work-in-progress replaces the old C header, embedded DLL, and
-`skip_hook` submodule with pure Go backends built on:
+The current rewrite replaces the old C header, embedded DLL, and `skip_hook`
+submodule with pure Go backends built on:
 
 - [`github.com/ebitengine/purego`](https://github.com/ebitengine/purego)
 - [`golang.org/x/sys/windows`](https://pkg.go.dev/golang.org/x/sys/windows)
@@ -18,6 +18,9 @@ The v2 work-in-progress replaces the old C header, embedded DLL, and
 ```sh
 go get github.com/aiwaki/makc
 ```
+
+The module path is currently `github.com/aiwaki/makc`; it does not use a `/v2`
+suffix yet.
 
 ## Quick Start
 
