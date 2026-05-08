@@ -1,10 +1,19 @@
 # makc
 
+<p align="center">
+  <strong>Pronounced <code>mak-see</code></strong><br>
+  <sub>Like <code>Maksim</code> without the final <code>m</code>.</sub><br>
+  <sub><strong>M</strong>ouse <strong>A</strong>nd <strong>K</strong>eyboard <strong>C</strong>ontrol for Go.</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/aiwaki/makc/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aiwaki/makc/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pkg.go.dev/github.com/aiwaki/makc"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/aiwaki/makc.svg"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/aiwaki/makc"></a>
+</p>
+
 `makc` is a no-cgo mouse and keyboard control package for Windows, macOS, and
 Linux.
-
-It is pronounced `mak-see`, like `Maksim` without the final `m`. The name is
-also a compact acronym for **Mouse And Keyboard Control**.
 
 The current rewrite replaces the old C header, embedded DLL, and `skip_hook`
 submodule with pure Go backends built on:
