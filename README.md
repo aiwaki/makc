@@ -59,6 +59,10 @@ func main() {
 	if err := client.Keyboard.TypeTextWithProfile(ctx, " v2", makc.VariableTyping(35*time.Millisecond, 90*time.Millisecond, 42)); err != nil {
 		log.Fatal(err)
 	}
+	balanced := makc.BalancedInputProfile(42)
+	if err := client.Keyboard.Inject(ctx, balanced.TextEvents(" ready")...); err != nil {
+		log.Fatal(err)
+	}
 
 	listener, err := client.Listen(ctx, makc.ListenOptions{Mask: makc.ListenAll})
 	if err == nil {
@@ -72,6 +76,9 @@ func main() {
 		log.Fatal(err)
 	}
 	if err := client.Mouse.ClickWithProfile(ctx, makc.ButtonLeft, makc.DoubleClick(30*time.Millisecond, 120*time.Millisecond)); err != nil {
+		log.Fatal(err)
+	}
+	if err := client.Mouse.Inject(ctx, balanced.DoubleClickEvents(makc.ButtonLeft)...); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -131,6 +138,8 @@ from the active codebase.
   `MoveToProfile`, `Drag`, `DragFrom`, and `DragBy`.
 - Mouse click timing: `ClickProfile`, `InstantClick`, `ClickWithHold`,
   `MultiClick`, `DoubleClick`, `FixedInterval`, and `VariableInterval`.
+- Reusable input presets: `InputProfile`, `InstantInputProfile`,
+  `FastInputProfile`, `BalancedInputProfile`, and `CarefulInputProfile`.
 - Keyboard state: `State`, `Down`.
 - Keyboard injection: `Press`, `Release`, `Tap`, `TapWithHold`, `Combo`,
   `TypeText`, `TypeTextWithProfile`, `ScanPress`, `ScanRelease`, `ScanTap`, and
