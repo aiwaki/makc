@@ -117,7 +117,7 @@ func run(ctx context.Context, selectDevices bool, start bool, deviceMask uint32,
 		return nil
 	}
 
-	selectRequest, err := callSelectDevices(ctx, portal, sessionPath, deviceMask)
+	selectRequest, err := callSelectDevices(ctx, portal, sessionPath, makeToken("makcselect"), deviceMask)
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func run(ctx context.Context, selectDevices bool, start bool, deviceMask uint32,
 	}
 
 	fmt.Println("portal_start_requested=true")
-	startRequest, err := callStart(ctx, portal, sessionPath, parentWindow)
+	startRequest, err := callStart(ctx, portal, sessionPath, makeToken("makcstart"), parentWindow)
 	if err != nil {
 		return err
 	}
@@ -169,9 +169,10 @@ func callCreateSession(ctx context.Context, portal dbus.BusObject, token string,
 	return request, nil
 }
 
-func callSelectDevices(ctx context.Context, portal dbus.BusObject, sessionPath dbus.ObjectPath, deviceMask uint32) (dbus.ObjectPath, error) {
+func callSelectDevices(ctx context.Context, portal dbus.BusObject, sessionPath dbus.ObjectPath, token string, deviceMask uint32) (dbus.ObjectPath, error) {
 	options := map[string]dbus.Variant{
-		"types": dbus.MakeVariant(deviceMask),
+		"handle_token": dbus.MakeVariant(token),
+		"types":        dbus.MakeVariant(deviceMask),
 	}
 	var request dbus.ObjectPath
 	if err := portal.CallWithContext(ctx, remoteDesktopIFace+".SelectDevices", 0, sessionPath, options).Store(&request); err != nil {
@@ -180,8 +181,10 @@ func callSelectDevices(ctx context.Context, portal dbus.BusObject, sessionPath d
 	return request, nil
 }
 
-func callStart(ctx context.Context, portal dbus.BusObject, sessionPath dbus.ObjectPath, parentWindow string) (dbus.ObjectPath, error) {
-	options := map[string]dbus.Variant{}
+func callStart(ctx context.Context, portal dbus.BusObject, sessionPath dbus.ObjectPath, token string, parentWindow string) (dbus.ObjectPath, error) {
+	options := map[string]dbus.Variant{
+		"handle_token": dbus.MakeVariant(token),
+	}
 	var request dbus.ObjectPath
 	if err := portal.CallWithContext(ctx, remoteDesktopIFace+".Start", 0, sessionPath, parentWindow, options).Store(&request); err != nil {
 		return "", fmt.Errorf("Start: %w", err)

@@ -243,11 +243,13 @@ stateful portal handshake. Its default mode attempts to create a transient
 `RemoteDesktop` portal session and closes any returned session handle; it does
 not call `Start`, does not request permissions, and does not inject input. Pass
 `-select-devices` to test `SelectDevices`; pass `-start` only when you are ready
-for the desktop permission prompt:
+for the desktop permission prompt. `-start` waits for the user-facing portal
+response, so use a longer timeout when testing it manually:
 
 ```sh
 GOOS=linux GOARCH=arm64 go build -o dist/makc-portal-handshake-linux-arm64 ./cmd/makc-portal-handshake
 bash scripts/linux-session-env.sh --exec ./dist/makc-portal-handshake-linux-arm64
+bash scripts/linux-session-env.sh --exec ./dist/makc-portal-handshake-linux-arm64 -select-devices -start -timeout 300s
 ```
 
 To allow non-root Linux uinput injection, run this inside the Linux guest and
