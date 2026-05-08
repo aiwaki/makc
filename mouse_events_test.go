@@ -98,6 +98,33 @@ func TestNaturalMovementProfileEndsAtTargetAndKeepsDuration(t *testing.T) {
 	}
 }
 
+func TestClickProfileEvents(t *testing.T) {
+	events := DoubleClick(10*time.Millisecond, 80*time.Millisecond).Events(ButtonLeft)
+	want := []MouseEvent{
+		MouseButtonEvent(ButtonLeft, Down),
+		MousePauseEvent(10 * time.Millisecond),
+		MouseButtonEvent(ButtonLeft, Up),
+		MousePauseEvent(80 * time.Millisecond),
+		MouseButtonEvent(ButtonLeft, Down),
+		MousePauseEvent(10 * time.Millisecond),
+		MouseButtonEvent(ButtonLeft, Up),
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+}
+
+func TestClickProfileNormalizesCountAndHold(t *testing.T) {
+	events := MultiClick(0, -10*time.Millisecond, FixedInterval(25*time.Millisecond)).Events(ButtonRight)
+	want := []MouseEvent{
+		MouseButtonEvent(ButtonRight, Down),
+		MouseButtonEvent(ButtonRight, Up),
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+}
+
 func TestMouseEventConstructors(t *testing.T) {
 	move := MouseMoveEvent(Rel(1, -2))
 	if move.Kind != MouseEventMove || !move.Move.Relative || move.Move.X != 1 || move.Move.Y != -2 {

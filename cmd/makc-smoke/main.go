@@ -22,6 +22,7 @@ func main() {
 	var tapKey string
 	var comboKeys string
 	var typeText string
+	var typeProfileName string
 	var scanCode uint
 	var scanExtended bool
 	var listen bool
@@ -32,6 +33,7 @@ func main() {
 	var normalizeOwnInjected bool
 	var inject bool
 	var click bool
+	var clickCount int
 	var absolute bool
 	var wheel int
 	var hwheel int
@@ -41,6 +43,13 @@ func main() {
 	var jitter int
 	var seed int64
 	var duration time.Duration
+	var tapHold time.Duration
+	var clickHold time.Duration
+	var clickInterval time.Duration
+	var typeDelay time.Duration
+	var typeMinDelay time.Duration
+	var typeMaxDelay time.Duration
+	var typeSeed int64
 	var dx int
 	var dy int
 	var wait time.Duration
@@ -53,6 +62,7 @@ func main() {
 	flag.StringVar(&tapKey, "tap", "", "keyboard key to tap")
 	flag.StringVar(&comboKeys, "combo", "", "keyboard combo such as control+a")
 	flag.StringVar(&typeText, "type", "", "Unicode text to type")
+	flag.StringVar(&typeProfileName, "type-profile", "instant", "typing profile used with -type: instant, fixed, variable")
 	flag.UintVar(&scanCode, "scan", 0, "scan code to tap")
 	flag.BoolVar(&scanExtended, "scan-extended", false, "mark -scan as an extended key")
 	flag.BoolVar(&listen, "listen", false, "listen for low-level mouse and keyboard events")
@@ -64,6 +74,7 @@ func main() {
 	flag.BoolVar(&inject, "inject", false, "inject a small relative mouse move")
 	flag.BoolVar(&absolute, "absolute", false, "treat dx and dy as absolute coordinates instead of a relative delta")
 	flag.BoolVar(&click, "click", false, "click the left mouse button; requires -inject")
+	flag.IntVar(&clickCount, "click-count", 1, "number of clicks to inject with -click")
 	flag.IntVar(&wheel, "wheel", 0, "vertical wheel detents to inject")
 	flag.IntVar(&hwheel, "hwheel", 0, "horizontal wheel detents to inject")
 	flag.BoolVar(&drag, "drag", false, "drag from the current position by dx,dy")
@@ -72,6 +83,13 @@ func main() {
 	flag.IntVar(&jitter, "jitter", 0, "natural movement max path jitter in pixels; 0 chooses a distance-based value")
 	flag.Int64Var(&seed, "seed", 1, "natural movement seed used with -profile natural")
 	flag.DurationVar(&duration, "duration", 120*time.Millisecond, "movement profile duration used with -drag")
+	flag.DurationVar(&tapHold, "tap-hold", 0, "hold duration used with -tap")
+	flag.DurationVar(&clickHold, "click-hold", 0, "button hold duration used with -click")
+	flag.DurationVar(&clickInterval, "click-interval", 0, "between-click interval used when -click-count is greater than 1")
+	flag.DurationVar(&typeDelay, "type-delay", 0, "fixed delay between runes used with -type-profile fixed")
+	flag.DurationVar(&typeMinDelay, "type-min-delay", 0, "minimum delay between runes used with -type-profile variable")
+	flag.DurationVar(&typeMaxDelay, "type-max-delay", 0, "maximum delay between runes used with -type-profile variable")
+	flag.Int64Var(&typeSeed, "type-seed", 1, "typing profile seed used with -type-profile variable")
 	flag.IntVar(&dx, "dx", 1, "relative X movement used with -inject")
 	flag.IntVar(&dy, "dy", 1, "relative Y movement used with -inject")
 	flag.DurationVar(&wait, "wait", 100*time.Millisecond, "delay before reading position after injection")
@@ -89,6 +107,10 @@ func main() {
 		log.Fatal(err)
 	}
 	profile, err := parseMovementProfile(profileName, steps, duration, jitter, seed)
+	if err != nil {
+		log.Fatal(err)
+	}
+	typingProfile, err := parseTypingProfile(typeProfileName, typeDelay, typeMinDelay, typeMaxDelay, typeSeed)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -163,10 +185,14 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := client.Keyboard.Tap(ctx, key); err != nil {
+		if err := client.Keyboard.TapWithHold(ctx, key, tapHold); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("tapped=%s\n", key)
+		if tapHold > 0 {
+			fmt.Printf("tapped=%s hold=%s\n", key, tapHold)
+		} else {
+			fmt.Printf("tapped=%s\n", key)
+		}
 	}
 	if comboKeys != "" {
 		keys, err := parseKeys(comboKeys)
@@ -185,10 +211,17 @@ func main() {
 		fmt.Printf("scan=0x%X extended=%v\n", scanCode, scanExtended)
 	}
 	if typeText != "" {
-		if err := client.Keyboard.TypeText(ctx, typeText); err != nil {
-			log.Fatal(err)
+		if typingProfileName(typeProfileName) == "instant" {
+			if err := client.Keyboard.TypeText(ctx, typeText); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("typed_runes=%d\n", len([]rune(typeText)))
+		} else {
+			if err := client.Keyboard.TypeTextWithProfile(ctx, typeText, typingProfile); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("typed_runes=%d profile=%s\n", len([]rune(typeText)), typeProfileName)
 		}
-		fmt.Printf("typed_runes=%d\n", len([]rune(typeText)))
 	}
 
 	if wheel != 0 {
@@ -244,10 +277,24 @@ func main() {
 	}
 
 	if click {
-		if err := client.Mouse.Click(ctx, button); err != nil {
-			log.Fatal(err)
+		if clickCount <= 1 && clickHold <= 0 && clickInterval <= 0 {
+			if err := client.Mouse.Click(ctx, button); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("clicked=%s\n", button)
+		} else {
+			if clickCount < 1 {
+				clickCount = 1
+			}
+			if clickHold < 0 {
+				clickHold = 0
+			}
+			clickProfile := makc.MultiClick(clickCount, clickHold, makc.FixedInterval(clickInterval))
+			if err := client.Mouse.ClickWithProfile(ctx, button, clickProfile); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("clicked=%s count=%d hold=%s interval=%s\n", button, clickCount, clickHold, clickInterval)
 		}
-		fmt.Printf("clicked=%s\n", button)
 	}
 }
 
@@ -556,6 +603,27 @@ func parseMovementProfile(name string, steps int, duration time.Duration, jitter
 	default:
 		return makc.MovementProfile{}, fmt.Errorf("unknown movement profile %q", name)
 	}
+}
+
+func parseTypingProfile(name string, delay, minDelay, maxDelay time.Duration, seed int64) (makc.TypingProfile, error) {
+	switch typingProfileName(name) {
+	case "instant":
+		return makc.InstantTyping, nil
+	case "fixed":
+		return makc.FixedTyping(delay), nil
+	case "variable", "natural":
+		return makc.VariableTyping(minDelay, maxDelay, seed), nil
+	default:
+		return makc.TypingProfile{}, fmt.Errorf("unknown typing profile %q", name)
+	}
+}
+
+func typingProfileName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return "instant"
+	}
+	return name
 }
 
 func parseInputTag(name string) (uintptr, bool, error) {

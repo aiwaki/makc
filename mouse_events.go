@@ -31,6 +31,69 @@ type MouseEvent struct {
 	Duration time.Duration
 }
 
+// ClickProfile describes one or more button clicks with optional hold and
+// between-click timing.
+type ClickProfile struct {
+	Count    int
+	Hold     time.Duration
+	Interval IntervalProfile
+}
+
+// InstantClick is the default click profile: one down event followed by one up
+// event without an explicit pause.
+var InstantClick = ClickProfile{Count: 1}
+
+// ClickWithHold creates a single-click profile that holds the button before
+// release.
+func ClickWithHold(hold time.Duration) ClickProfile {
+	return ClickProfile{
+		Count: 1,
+		Hold:  hold,
+	}
+}
+
+// MultiClick creates a profile for repeated clicks.
+func MultiClick(count int, hold time.Duration, interval IntervalProfile) ClickProfile {
+	return ClickProfile{
+		Count:    count,
+		Hold:     hold,
+		Interval: interval,
+	}
+}
+
+// DoubleClick creates a two-click profile with a fixed interval between clicks.
+func DoubleClick(hold, interval time.Duration) ClickProfile {
+	return MultiClick(2, hold, FixedInterval(interval))
+}
+
+// Events returns mouse events for clicking the given button.
+func (p ClickProfile) Events(button MouseButton) []MouseEvent {
+	p = p.normalized()
+	intervals := p.Interval.Durations(p.Count - 1)
+	events := make([]MouseEvent, 0, p.Count*4)
+	for i := 0; i < p.Count; i++ {
+		events = append(events, MouseButtonEvent(button, Down))
+		if p.Hold > 0 {
+			events = append(events, MousePauseEvent(p.Hold))
+		}
+		events = append(events, MouseButtonEvent(button, Up))
+		if i < len(intervals) && intervals[i] > 0 {
+			events = append(events, MousePauseEvent(intervals[i]))
+		}
+	}
+	return events
+}
+
+func (p ClickProfile) normalized() ClickProfile {
+	if p.Count < 1 {
+		p.Count = 1
+	}
+	if p.Hold < 0 {
+		p.Hold = 0
+	}
+	return p
+}
+
 // MouseMoveEvent creates a movement event.
 func MouseMoveEvent(move MouseMove) MouseEvent {
 	return MouseEvent{
