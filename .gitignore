@@ -1,2 +1,7 @@
 dist/
 
+# Local assistant/agent workspaces are machine-specific and should not be part
+# of the public Go module.
+.agents/
+.claude/
+.codex/
