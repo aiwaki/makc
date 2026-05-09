@@ -179,7 +179,12 @@ func (c *Client) Listen(ctx context.Context, opts ListenOptions) (*Listener, err
 	if err := c.ensureReady(ctx); err != nil {
 		return nil, err
 	}
-	return c.backend.ListenInput(ctx, normalizeListenOptions(opts))
+	ctx = contextOrBackground(ctx)
+	opts = normalizeListenOptions(opts)
+	if err := validateListenOptions(opts); err != nil {
+		return nil, err
+	}
+	return c.backend.ListenInput(ctx, opts)
 }
 
 func normalizeListenOptions(opts ListenOptions) ListenOptions {
@@ -190,6 +195,13 @@ func normalizeListenOptions(opts ListenOptions) ListenOptions {
 		opts.Buffer = 64
 	}
 	return opts
+}
+
+func validateListenOptions(opts ListenOptions) error {
+	if opts.Mask&^ListenAll != 0 {
+		return unsupported("unknown listen mask")
+	}
+	return nil
 }
 
 func prepareInputEvent(event *InputEvent, opts ListenOptions) bool {

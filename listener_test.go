@@ -1,6 +1,10 @@
 package makc
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func TestNormalizeListenOptions(t *testing.T) {
 	opts := normalizeListenOptions(ListenOptions{})
@@ -23,6 +27,40 @@ func TestNormalizeListenOptions(t *testing.T) {
 	}
 }
 
+func TestValidateListenOptionsRejectsUnknownMask(t *testing.T) {
+	err := validateListenOptions(ListenOptions{Mask: ListenMask(1 << 7)})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("validateListenOptions() error = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestClientListenUsesBackgroundForNilContext(t *testing.T) {
+	backend := &listenTestBackend{}
+	client := &Client{backend: backend}
+
+	//lint:ignore SA1012 Listen intentionally accepts nil contexts for API consistency.
+	_, err := client.Listen(nil, ListenOptions{})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Listen() error = %v, want ErrUnsupported", err)
+	}
+	if backend.ctx == nil {
+		t.Fatal("ListenInput context is nil, want background context")
+	}
+}
+
+func TestClientListenRejectsUnknownMaskBeforeBackend(t *testing.T) {
+	backend := &listenTestBackend{}
+	client := &Client{backend: backend}
+
+	_, err := client.Listen(context.Background(), ListenOptions{Mask: ListenMask(1 << 7)})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Listen() error = %v, want ErrUnsupported", err)
+	}
+	if backend.called {
+		t.Fatal("ListenInput was called for an invalid mask")
+	}
+}
+
 func TestListenBackendString(t *testing.T) {
 	tests := map[ListenBackend]string{
 		ListenBackendAuto:         "auto",
@@ -36,6 +74,18 @@ func TestListenBackendString(t *testing.T) {
 			t.Fatalf("ListenBackend(%d).String() = %q, want %q", backend, got, want)
 		}
 	}
+}
+
+type listenTestBackend struct {
+	sequenceTestBackend
+	called bool
+	ctx    context.Context
+}
+
+func (b *listenTestBackend) ListenInput(ctx context.Context, _ ListenOptions) (*Listener, error) {
+	b.called = true
+	b.ctx = ctx
+	return nil, ErrUnsupported
 }
 
 func TestPrepareInputEventFiltersInjectedByDefault(t *testing.T) {

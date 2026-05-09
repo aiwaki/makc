@@ -140,18 +140,6 @@ func (c *Client) RuntimeInfo(ctx context.Context) (RuntimeInfo, error) {
 	return InspectRuntime(), nil
 }
 
-func unixDisplayInfo(sessionType, currentDesktop, desktopSession, display, waylandDisplay string) DisplayInfo {
-	sessionType = strings.ToLower(strings.TrimSpace(sessionType))
-	return DisplayInfo{
-		Server:         unixDisplayServer(sessionType, display, waylandDisplay),
-		SessionType:    sessionType,
-		CurrentDesktop: currentDesktop,
-		DesktopSession: desktopSession,
-		Display:        display,
-		WaylandDisplay: waylandDisplay,
-	}
-}
-
 func unixDisplayServer(sessionType, display, waylandDisplay string) DisplayServer {
 	sessionType = strings.ToLower(strings.TrimSpace(sessionType))
 	display = strings.TrimSpace(display)

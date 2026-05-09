@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 for tagged releases.
 
+## [0.1.2] - 2026-05-09
+
+Code hardening release.
+
+### Fixed
+
+- Made `Client.Close` safe for zero-value clients.
+- Made `Client.Listen` handle a nil context consistently with the rest of the
+  API.
+- Rejected unknown `ListenMask` bits before starting a backend listener.
+
+### Changed
+
+- Moved Linux-only display helper wiring behind Linux build constraints.
+- Lowered the module's Go version from `1.25.0` to `1.23.0` by using
+  `golang.org/x/sys v0.35.0`.
+
 ## [0.1.1] - 2026-05-09
 
 Public repository hardening release.
