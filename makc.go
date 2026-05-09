@@ -188,6 +188,9 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.backend == nil {
+		return nil
+	}
 	return c.backend.Close()
 }
 
@@ -204,6 +207,13 @@ func (c *Client) ensureReady(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 func unsupported(name string) error {

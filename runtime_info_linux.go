@@ -31,6 +31,18 @@ func fillRuntimeInfo(info *RuntimeInfo) {
 	}
 }
 
+func unixDisplayInfo(sessionType, currentDesktop, desktopSession, display, waylandDisplay string) DisplayInfo {
+	sessionType = strings.ToLower(strings.TrimSpace(sessionType))
+	return DisplayInfo{
+		Server:         unixDisplayServer(sessionType, display, waylandDisplay),
+		SessionType:    sessionType,
+		CurrentDesktop: currentDesktop,
+		DesktopSession: desktopSession,
+		Display:        display,
+		WaylandDisplay: waylandDisplay,
+	}
+}
+
 func linuxEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
 }
