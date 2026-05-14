@@ -305,9 +305,13 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 			continue
 		}
 		inputEvents, err := b.rawInputEvents(msg.LParam)
-		if msg.WParam == rimInput {
-			b.api.defWindowProc(msg.Hwnd, msg.Message, msg.WParam, msg.LParam)
-		}
+		// Per MSDN WM_INPUT remarks, the application must always call
+		// DefWindowProc for cleanup of the raw input data, regardless of
+		// whether wParam is RIM_INPUT (foreground) or RIM_INPUTSINK
+		// (background). Skipping it for RIM_INPUTSINK leaks kernel
+		// buffers — and ridevInputSink is exactly the flag we register
+		// with, so most events arrive as RIM_INPUTSINK.
+		b.api.defWindowProc(msg.Hwnd, msg.Message, msg.WParam, msg.LParam)
 		if err != nil {
 			loopErr = err
 			break
