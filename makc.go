@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -142,8 +143,10 @@ type Client struct {
 	Mouse    *Mouse
 	Keyboard *Keyboard
 
-	backend systemBackend
-	closed  bool
+	backend   systemBackend
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open initializes a makc client.
@@ -182,20 +185,23 @@ func (c *Client) InputTag() uintptr {
 	return c.backend.InputTag()
 }
 
-// Close releases backend resources. It is safe to call Close more than once.
+// Close releases backend resources. It is safe to call Close more than once
+// and from multiple goroutines; the underlying backend Close runs exactly once.
 func (c *Client) Close() error {
-	if c == nil || c.closed {
+	if c == nil {
 		return nil
 	}
-	c.closed = true
-	if c.backend == nil {
-		return nil
-	}
-	return c.backend.Close()
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		if c.backend != nil {
+			c.closeErr = c.backend.Close()
+		}
+	})
+	return c.closeErr
 }
 
 func (c *Client) ensureReady(ctx context.Context) error {
-	if c == nil || c.backend == nil || c.closed {
+	if c == nil || c.backend == nil || c.closed.Load() {
 		return ErrClosed
 	}
 	if ctx == nil {
