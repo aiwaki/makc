@@ -3,12 +3,14 @@
 package makc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 	"unsafe"
@@ -408,8 +410,52 @@ func (d *uinputDevice) setup() error {
 		return fmt.Errorf("makc: UI_DEV_CREATE: %w", err)
 	}
 	d.created = true
-	time.Sleep(20 * time.Millisecond)
+	// After UI_DEV_CREATE the kernel asynchronously hands the device to
+	// udev, which creates /dev/input/eventN. The previous code slept a
+	// fixed 20ms — wrong both ways: too short under load (first events
+	// would race ahead of device readiness and silently disappear) and
+	// too long on a quiet system. Use UI_GET_SYSNAME (kernel ≥ 3.15) to
+	// learn the sysfs name, then poll for the event node to appear with
+	// a bounded deadline. Older kernels fall back to the legacy sleep.
+	if err := waitUInputReady(d.fd, 250*time.Millisecond); err != nil {
+		time.Sleep(20 * time.Millisecond)
+	}
 	return nil
+}
+
+// waitUInputReady blocks until the event device backing fd is visible in
+// sysfs, or until deadline elapses. Returns the underlying ioctl error
+// when UI_GET_SYSNAME is not available (e.g. pre-3.15 kernels) so the
+// caller can fall back gracefully.
+func waitUInputReady(fd int, deadline time.Duration) error {
+	const sysnameMaxLen = 64
+	buf := make([]byte, sysnameMaxLen)
+	if err := linuxIoctl(fd, uiGetSysname(sysnameMaxLen), uintptr(unsafe.Pointer(&buf[0]))); err != nil {
+		return err
+	}
+	n := bytes.IndexByte(buf, 0)
+	if n < 0 {
+		n = len(buf)
+	}
+	sysname := string(buf[:n])
+	if sysname == "" {
+		return errors.New("makc: empty UI_GET_SYSNAME result")
+	}
+	pattern := filepath.Join("/sys/devices/virtual/input", sysname, "event*")
+	end := time.Now().Add(deadline)
+	for {
+		matches, _ := filepath.Glob(pattern)
+		if len(matches) > 0 {
+			return nil
+		}
+		if time.Now().After(end) {
+			// Best-effort: device created but sysfs entry not yet visible.
+			// Returning nil avoids failing device init for this — the
+			// fallback sleep already happens at the call site.
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func linuxSupportedKeys() []uint16 {
@@ -550,6 +596,12 @@ const (
 	uiSetKeyBit  = (linuxIOCWrite << linuxIOCDirShift) | (unsafe.Sizeof(int32(0)) << linuxIOCSizeShift) | ('U' << linuxIOCTypeShift) | (101 << linuxIOCNRShift)
 	uiSetRelBit  = (linuxIOCWrite << linuxIOCDirShift) | (unsafe.Sizeof(int32(0)) << linuxIOCSizeShift) | ('U' << linuxIOCTypeShift) | (102 << linuxIOCNRShift)
 )
+
+// uiGetSysname encodes UI_GET_SYSNAME(len) — kernel ≥ 3.15. The macro is
+// _IOC(_IOC_READ, 'U', 44, len), matching linuxIOCR with NR=44.
+func uiGetSysname(size uintptr) uintptr {
+	return linuxIOCR(44, size)
+}
 
 type linuxInputEvent struct {
 	Time  unix.Timeval
