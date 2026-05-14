@@ -2,6 +2,7 @@ package makc
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 )
 
@@ -156,6 +157,42 @@ type Listener struct {
 
 	done   <-chan error
 	cancel context.CancelFunc
+	stats  *listenerStats
+}
+
+// ListenerStats reports counters maintained by an active or finished listener.
+type ListenerStats struct {
+	// Delivered is the number of events successfully sent on Events since
+	// the listener started.
+	Delivered uint64
+
+	// Dropped is the number of events the listener observed but dropped
+	// because the Events channel buffer was full. Tune ListenOptions.Buffer
+	// or drain Events faster if Dropped grows.
+	Dropped uint64
+}
+
+// listenerStats is the internal counter pair shared between the goroutine
+// producing events and Listener.Stats.
+type listenerStats struct {
+	delivered atomic.Uint64
+	dropped   atomic.Uint64
+}
+
+func newListenerStats() *listenerStats {
+	return &listenerStats{}
+}
+
+// Stats returns a snapshot of the listener's delivery counters. It is safe
+// to call from any goroutine, including after the listener stops.
+func (l *Listener) Stats() ListenerStats {
+	if l == nil || l.stats == nil {
+		return ListenerStats{}
+	}
+	return ListenerStats{
+		Delivered: l.stats.delivered.Load(),
+		Dropped:   l.stats.dropped.Load(),
+	}
 }
 
 // Close requests listener shutdown.

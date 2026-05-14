@@ -89,7 +89,7 @@ func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*List
 	}
 }
 
-type inputListenerRunner func(context.Context, ListenOptions, chan<- InputEvent, chan<- error, chan<- error)
+type inputListenerRunner func(context.Context, ListenOptions, *listenerStats, chan<- InputEvent, chan<- error, chan<- error)
 
 func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, runner inputListenerRunner) (*Listener, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -97,8 +97,9 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 	events := make(chan InputEvent, opts.Buffer)
 	done := make(chan error, 1)
 	ready := make(chan error, 1)
+	stats := newListenerStats()
 
-	go runner(ctx, opts, events, ready, done)
+	go runner(ctx, opts, stats, events, ready, done)
 
 	select {
 	case err := <-ready:
@@ -110,6 +111,7 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 			Events: events,
 			done:   done,
 			cancel: cancel,
+			stats:  stats,
 		}, nil
 	case <-ctx.Done():
 		cancel()
@@ -117,7 +119,7 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 	}
 }
 
-func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOptions, stats *listenerStats, events chan<- InputEvent, ready chan<- error, done chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(events)
@@ -135,7 +137,9 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 		}
 		select {
 		case events <- event:
+			stats.delivered.Add(1)
 		default:
+			stats.dropped.Add(1)
 		}
 	}
 
@@ -214,7 +218,7 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 	done <- err
 }
 
-func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions, stats *listenerStats, events chan<- InputEvent, ready chan<- error, done chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(events)
@@ -277,7 +281,9 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		}
 		select {
 		case events <- event:
+			stats.delivered.Add(1)
 		default:
+			stats.dropped.Add(1)
 		}
 	}
 

@@ -76,12 +76,14 @@ func linuxListenEvdev(ctx context.Context, opts ListenOptions) (*Listener, error
 
 	events := make(chan InputEvent, opts.Buffer)
 	done := make(chan error, 1)
-	go runLinuxEvdevListener(ctx, opts, devices, events, done)
+	stats := newListenerStats()
+	go runLinuxEvdevListener(ctx, opts, stats, devices, events, done)
 
 	return &Listener{
 		Events: events,
 		done:   done,
 		cancel: cancel,
+		stats:  stats,
 	}, nil
 }
 
@@ -176,7 +178,7 @@ func linuxEvdevKeyDown(fd int, code uint16) (bool, error) {
 	return bitSet(bits[:], code), nil
 }
 
-func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, devices []*linuxEvdevDevice, events chan<- InputEvent, done chan<- error) {
+func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, stats *listenerStats, devices []*linuxEvdevDevice, events chan<- InputEvent, done chan<- error) {
 	defer close(events)
 	defer closeLinuxEvdevDevices(devices)
 
@@ -223,7 +225,7 @@ func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, devices []*l
 			if revents&unix.POLLIN == 0 {
 				continue
 			}
-			if err := readLinuxEvdevEvents(devices[i], opts, events); err != nil {
+			if err := readLinuxEvdevEvents(devices[i], opts, stats, events); err != nil {
 				done <- err
 				return
 			}
@@ -233,7 +235,7 @@ func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, devices []*l
 	done <- nil
 }
 
-func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, out chan<- InputEvent) error {
+func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) error {
 	for {
 		event, err := readLinuxInputEvent(device.fd)
 		if err != nil {
@@ -245,7 +247,7 @@ func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, out chan
 			}
 			return fmt.Errorf("makc: read Linux evdev device %s: %w", device.path, err)
 		}
-		linuxEvdevEvent(device, event, opts, out)
+		linuxEvdevEvent(device, event, opts, stats, out)
 	}
 }
 
@@ -266,11 +268,11 @@ func readLinuxInputEvent(fd int) (linuxInputEvent, error) {
 	return event, nil
 }
 
-func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOptions, out chan<- InputEvent) {
+func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) {
 	switch ev.Type {
 	case linuxEvSyn:
 		if ev.Code == linuxSynReport {
-			linuxEvdevFlushRel(device, ev.Time, opts, out)
+			linuxEvdevFlushRel(device, ev.Time, opts, stats, out)
 		}
 	case linuxEvRel:
 		if opts.Mask&ListenMouse == 0 {
@@ -295,7 +297,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 			if opts.Mask&ListenMouse == 0 {
 				return
 			}
-			linuxEvdevEmit(opts, out, InputEvent{
+			linuxEvdevEmit(opts, stats, out, InputEvent{
 				Kind:   InputEventMouseButton,
 				Time:   linuxEventTime(ev.Time),
 				Raw:    true,
@@ -311,7 +313,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 		if !ok || opts.Mask&ListenKeyboard == 0 {
 			return
 		}
-		linuxEvdevEmit(opts, out, InputEvent{
+		linuxEvdevEmit(opts, stats, out, InputEvent{
 			Kind:   InputEventKey,
 			Time:   linuxEventTime(ev.Time),
 			Raw:    true,
@@ -325,7 +327,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 	}
 }
 
-func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts ListenOptions, out chan<- InputEvent) {
+func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) {
 	if opts.Mask&ListenMouse == 0 {
 		device.relX = 0
 		device.relY = 0
@@ -342,19 +344,19 @@ func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts L
 		event := base
 		event.Kind = InputEventMouseMove
 		event.Mouse.Move = Rel(int(device.relX), int(device.relY))
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	if device.wheel != 0 {
 		event := base
 		event.Kind = InputEventMouseWheel
 		event.Mouse.Delta = int(device.wheel) * WheelDelta
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	if device.hwheel != 0 {
 		event := base
 		event.Kind = InputEventMouseHWheel
 		event.Mouse.Delta = int(device.hwheel) * WheelDelta
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	device.relX = 0
 	device.relY = 0
@@ -362,13 +364,15 @@ func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts L
 	device.hwheel = 0
 }
 
-func linuxEvdevEmit(opts ListenOptions, out chan<- InputEvent, event InputEvent) {
+func linuxEvdevEmit(opts ListenOptions, stats *listenerStats, out chan<- InputEvent, event InputEvent) {
 	if !prepareInputEvent(&event, opts) {
 		return
 	}
 	select {
 	case out <- event:
+		stats.delivered.Add(1)
 	default:
+		stats.dropped.Add(1)
 	}
 }
 
