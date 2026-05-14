@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -41,6 +42,14 @@ type linuxBackend struct {
 	x11               *linuxX11Display
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
+
+	// stateMu guards the lazily-opened evdev fd cache used by KeyState
+	// and MouseButtonState. Without the cache, every state query was
+	// glob+open+ioctl+close across every /dev/input/event* — easily
+	// 100+ syscalls per call, fatal for any polling workload.
+	stateMu      sync.Mutex
+	stateDevices []*linuxEvdevDevice
+	stateLoaded  bool
 }
 
 func newSystemBackend(cfg config) (systemBackend, error) {
@@ -89,6 +98,11 @@ func (b *linuxBackend) Close() error {
 	if b == nil {
 		return nil
 	}
+	b.stateMu.Lock()
+	closeLinuxEvdevDevices(b.stateDevices)
+	b.stateDevices = nil
+	b.stateLoaded = false
+	b.stateMu.Unlock()
 	return errors.Join(
 		b.device.Close(),
 		b.x11.Close(),
@@ -126,7 +140,7 @@ func (b *linuxBackend) MouseButtonState(ctx context.Context, button MouseButton)
 	if err != nil {
 		return Up, err
 	}
-	return linuxEvdevKeyState(ctx, code)
+	return b.evdevKeyState(ctx, code)
 }
 
 func (b *linuxBackend) MoveMouse(ctx context.Context, move MouseMove) error {
@@ -193,7 +207,7 @@ func (b *linuxBackend) KeyState(ctx context.Context, key Key) (State, error) {
 	if err != nil {
 		return Up, err
 	}
-	return linuxEvdevKeyState(ctx, code)
+	return b.evdevKeyState(ctx, code)
 }
 
 func (b *linuxBackend) SetKey(ctx context.Context, key Key, state State) error {

@@ -38,23 +38,40 @@ type linuxEvdevDevice struct {
 	hwheel int32
 }
 
-func linuxEvdevKeyState(ctx context.Context, code uint16) (State, error) {
+// evdevKeyState answers a key/button state query using a cached set of
+// evdev fds. The cache is opened lazily on first call and reused; on a
+// per-device disconnect (ENODEV / ENXIO) the entry is dropped from the
+// cache and not retried until backend re-init. Listener paths still open
+// their own short-lived fd set — the cache here is exclusively for the
+// state-poll path.
+func (b *linuxBackend) evdevKeyState(ctx context.Context, code uint16) (State, error) {
 	if err := checkContext(ctx); err != nil {
 		return Up, err
 	}
-	devices, err := openLinuxEvdevDevices(ListenAll)
-	if err != nil {
-		return Up, err
-	}
-	defer closeLinuxEvdevDevices(devices)
 
-	for _, device := range devices {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+
+	if !b.stateLoaded {
+		devices, err := openLinuxEvdevDevices(ListenAll)
+		if err != nil {
+			return Up, err
+		}
+		b.stateDevices = devices
+		b.stateLoaded = true
+	}
+
+	for i := 0; i < len(b.stateDevices); {
 		if err := checkContext(ctx); err != nil {
 			return Up, err
 		}
+		device := b.stateDevices[i]
 		down, err := linuxEvdevKeyDown(device.fd, code)
 		if err != nil {
 			if errors.Is(err, unix.ENODEV) || errors.Is(err, unix.ENXIO) {
+				_ = unix.Close(device.fd)
+				device.fd = -1
+				b.stateDevices = append(b.stateDevices[:i], b.stateDevices[i+1:]...)
 				continue
 			}
 			return Up, fmt.Errorf("makc: EVIOCGKEY(%s): %w", device.path, err)
@@ -62,6 +79,7 @@ func linuxEvdevKeyState(ctx context.Context, code uint16) (State, error) {
 		if down {
 			return Down, nil
 		}
+		i++
 	}
 	return Up, nil
 }
