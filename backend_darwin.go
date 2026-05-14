@@ -45,6 +45,13 @@ type darwinBackend struct {
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 
+	// cgSource is a single CGEventSource shared by every injected event.
+	// CGEventSourceCreate is expensive (allocates IOKit/WindowServer
+	// resources) and was previously called per event in the hot path.
+	// CGEventSource is documented as safe to reuse across threads for
+	// the lifetime of the backend.
+	cgSource uintptr
+
 	mu                 sync.Mutex
 	pressedMouseButton uint32
 }
@@ -81,14 +88,27 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		return nil, fmt.Errorf("makc: unknown keyboard injection backend %d", cfg.keyboardInjection)
 	}
 
+	source := api.cgEventSourceCreate(cgEventSourceStateHIDSystem)
+	if source == 0 {
+		return nil, errors.New("makc: CGEventSourceCreate failed")
+	}
+
 	return &darwinBackend{
 		api:               api,
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
+		cgSource:          source,
 	}, nil
 }
 
 func (b *darwinBackend) Close() error {
+	if b == nil {
+		return nil
+	}
+	if b.cgSource != 0 {
+		b.api.cfRelease(b.cgSource)
+		b.cgSource = 0
+	}
 	return nil
 }
 
@@ -310,13 +330,7 @@ func (b *darwinBackend) postMouseButton(button MouseButton, state State) error {
 }
 
 func (b *darwinBackend) postMouseEvent(eventType uint32, location cgPoint, button uint32, deltaX int64, deltaY int64) error {
-	source, err := b.eventSource()
-	if err != nil {
-		return err
-	}
-	defer b.api.cfRelease(source)
-
-	event := b.api.cgEventCreateMouseEvent(source, eventType, location, button)
+	event := b.api.cgEventCreateMouseEvent(b.cgSource, eventType, location, button)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateMouseEvent failed")
 	}
@@ -333,13 +347,7 @@ func (b *darwinBackend) postScroll(vertical, horizontal int32) error {
 	if vertical == 0 && horizontal == 0 {
 		return nil
 	}
-	source, err := b.eventSource()
-	if err != nil {
-		return err
-	}
-	defer b.api.cfRelease(source)
-
-	event := b.api.cgEventCreateScrollWheelEvent(source, cgScrollEventUnitLine, 2, vertical, horizontal)
+	event := b.api.cgEventCreateScrollWheelEvent(b.cgSource, cgScrollEventUnitLine, 2, vertical, horizontal)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateScrollWheelEvent failed")
 	}
@@ -352,13 +360,7 @@ func (b *darwinBackend) postKeyboard(keyCode uint16, state State) error {
 	if !state.valid() {
 		return errors.New("makc: key state is unknown")
 	}
-	source, err := b.eventSource()
-	if err != nil {
-		return err
-	}
-	defer b.api.cfRelease(source)
-
-	event := b.api.cgEventCreateKeyboardEvent(source, keyCode, state == Down)
+	event := b.api.cgEventCreateKeyboardEvent(b.cgSource, keyCode, state == Down)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateKeyboardEvent failed")
 	}
@@ -384,13 +386,7 @@ func (b *darwinBackend) postText(text string) error {
 }
 
 func (b *darwinBackend) postUnicode(units []uint16, state State) error {
-	source, err := b.eventSource()
-	if err != nil {
-		return err
-	}
-	defer b.api.cfRelease(source)
-
-	event := b.api.cgEventCreateKeyboardEvent(source, 0, state == Down)
+	event := b.api.cgEventCreateKeyboardEvent(b.cgSource, 0, state == Down)
 	if event == 0 {
 		return errors.New("makc: CGEventCreateKeyboardEvent(unicode) failed")
 	}
@@ -398,14 +394,6 @@ func (b *darwinBackend) postUnicode(units []uint16, state State) error {
 	b.api.cgEventKeyboardSetUnicodeString(event, uintptr(len(units)), &units[0])
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
-}
-
-func (b *darwinBackend) eventSource() (uintptr, error) {
-	source := b.api.cgEventSourceCreate(cgEventSourceStateHIDSystem)
-	if source == 0 {
-		return 0, errors.New("makc: CGEventSourceCreate failed")
-	}
-	return source, nil
 }
 
 func (b *darwinBackend) dragMouseButton() (uint32, bool) {
