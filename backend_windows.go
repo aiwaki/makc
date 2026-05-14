@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"unicode/utf16"
 	"unsafe"
 
@@ -59,6 +61,39 @@ type winBackend struct {
 	keyboardInjection KeyboardInjectionBackend
 	inputTag          uintptr
 	mouseMotionFlags  MouseMotionFlag
+
+	// Singleton callbacks for low-level hooks and the raw-input window
+	// procedure. windows.NewCallback allocates a thunk slot from a small
+	// global table (~2000 entries) that is never released. Allocating new
+	// slots per Listen call guarantees an eventual exhaustion panic on a
+	// long-running process. We register each callback at most once for
+	// the lifetime of the backend and route the actual event delivery
+	// through atomic-loaded emitter pointers, which Listen swaps in and
+	// out on start/stop.
+	hookCallbacksOnce sync.Once
+	mouseHookCallback uintptr
+	kbdHookCallback   uintptr
+	wndProcCallback   uintptr
+
+	activeMouseEmitter atomic.Pointer[hookEmitter]
+	activeKbdEmitter   atomic.Pointer[hookEmitter]
+	activeRawEmitter   atomic.Pointer[hookEmitter]
+
+	// Raw-input window class is registered lazily once per backend and
+	// torn down in Close. Each Listen call creates its own ephemeral
+	// window of this class.
+	rawClassOnce  sync.Once
+	rawClassErr   error
+	rawClassName  *uint16
+	rawClassAtom  uint16
+}
+
+// hookEmitter is the per-Listen receiver wired into the singleton hook
+// callbacks. Listen installs an emitter in the matching atomic.Pointer slot
+// before installing its OS hook and clears the slot on shutdown. The hot path
+// in the callback does one atomic load, one nil-check, and dispatches.
+type hookEmitter struct {
+	emit func(InputEvent)
 }
 
 func newSystemBackend(cfg config) (systemBackend, error) {
@@ -119,6 +154,14 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 }
 
 func (b *winBackend) Close() error {
+	if b == nil {
+		return nil
+	}
+	if b.rawClassName != nil && b.rawClassAtom != 0 {
+		b.api.unregisterClass(b.rawClassName, 0)
+		b.rawClassName = nil
+		b.rawClassAtom = 0
+	}
 	return nil
 }
 
