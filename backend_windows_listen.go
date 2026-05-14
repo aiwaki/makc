@@ -153,9 +153,9 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
 		})
 		callbacks = append(callbacks, cb)
-		hook := b.api.setWindowsHookEx(whMouseLL, cb, 0, 0)
-		if hook == 0 {
-			ready <- fmt.Errorf("makc: SetWindowsHookExW(WH_MOUSE_LL) failed: %w", lastWindowsError())
+		hook, hookErr := b.api.setWindowsHookEx(whMouseLL, cb, 0, 0)
+		if hookErr != nil {
+			ready <- hookErr
 			done <- nil
 			return
 		}
@@ -172,10 +172,10 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
 		})
 		callbacks = append(callbacks, cb)
-		hook := b.api.setWindowsHookEx(whKeyboardLL, cb, 0, 0)
-		if hook == 0 {
+		hook, hookErr := b.api.setWindowsHookEx(whKeyboardLL, cb, 0, 0)
+		if hookErr != nil {
 			unhookAll(b.api, hooks)
-			ready <- fmt.Errorf("makc: SetWindowsHookExW(WH_KEYBOARD_LL) failed: %w", lastWindowsError())
+			ready <- hookErr
 			done <- nil
 			return
 		}
@@ -197,9 +197,9 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 
 	var msg winMsg
 	for {
-		result := b.api.getMessage(&msg, 0, 0, 0)
-		if result == -1 {
-			err = fmt.Errorf("makc: GetMessageW failed: %w", lastWindowsError())
+		result, getErr := b.api.getMessage(&msg, 0, 0, 0)
+		if getErr != nil {
+			err = getErr
 			break
 		}
 		if result == 0 {
@@ -246,16 +246,16 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		LpfnWndProc:   wndProc,
 		LpszClassName: className,
 	}
-	if atom := b.api.registerClassEx(&wc); atom == 0 {
-		ready <- fmt.Errorf("makc: RegisterClassExW(raw input) failed: %w", lastWindowsError())
+	if _, err := b.api.registerClassEx(&wc); err != nil {
+		ready <- err
 		done <- nil
 		return
 	}
 	defer b.api.unregisterClass(className, 0)
 
-	hwnd := b.api.createWindowEx(0, className, windowName, 0, 0, 0, 0, 0, hwndMessage(), 0, 0, 0)
-	if hwnd == 0 {
-		ready <- fmt.Errorf("makc: CreateWindowExW(raw input) failed: %w", lastWindowsError())
+	hwnd, err := b.api.createWindowEx(0, className, windowName, 0, 0, 0, 0, 0, hwndMessage(), 0, 0, 0)
+	if err != nil {
+		ready <- err
 		done <- nil
 		return
 	}
@@ -267,8 +267,8 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		done <- nil
 		return
 	}
-	if ok := b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{}))); ok == 0 {
-		ready <- fmt.Errorf("makc: RegisterRawInputDevices failed: %w", lastWindowsError())
+	if err := b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{}))); err != nil {
+		ready <- err
 		done <- nil
 		return
 	}
@@ -298,9 +298,9 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 	var loopErr error
 	var msg winMsg
 	for {
-		result := b.api.getMessage(&msg, 0, 0, 0)
-		if result == -1 {
-			loopErr = fmt.Errorf("makc: GetMessageW failed: %w", lastWindowsError())
+		result, getErr := b.api.getMessage(&msg, 0, 0, 0)
+		if getErr != nil {
+			loopErr = getErr
 			break
 		}
 		if result == 0 {
@@ -372,23 +372,22 @@ func (b *winBackend) unregisterRawInputDevices(mask ListenMask) {
 	if len(devices) == 0 {
 		return
 	}
-	b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{})))
+	_ = b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{})))
 }
 
 func (b *winBackend) rawInputEvents(handle uintptr) ([]InputEvent, error) {
 	var size uint32
 	headerSize := uint32(unsafe.Sizeof(rawInputHeader{}))
-	if got := b.api.getRawInputData(handle, ridInput, nil, &size, headerSize); got == ^uint32(0) {
-		return nil, fmt.Errorf("makc: GetRawInputData(size) failed: %w", lastWindowsError())
+	if _, err := b.api.getRawInputData(handle, ridInput, nil, &size, headerSize); err != nil {
+		return nil, fmt.Errorf("makc: GetRawInputData(size) failed: %w", err)
 	}
 	if size == 0 {
 		return nil, nil
 	}
 
 	buf := make([]byte, size)
-	got := b.api.getRawInputData(handle, ridInput, unsafe.Pointer(&buf[0]), &size, headerSize)
-	if got == ^uint32(0) {
-		return nil, fmt.Errorf("makc: GetRawInputData(input) failed: %w", lastWindowsError())
+	if _, err := b.api.getRawInputData(handle, ridInput, unsafe.Pointer(&buf[0]), &size, headerSize); err != nil {
+		return nil, fmt.Errorf("makc: GetRawInputData(input) failed: %w", err)
 	}
 	return parseRawInputEvents(buf), nil
 }
