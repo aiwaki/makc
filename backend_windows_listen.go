@@ -99,8 +99,14 @@ func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*List
 func (b *winBackend) ensureHookCallbacks() {
 	b.hookCallbacksOnce.Do(func() {
 		b.mouseHookCallback = windows.NewCallback(func(nCode int, wParam uintptr, lParam *msllHookStruct) uintptr {
-			if nCode >= 0 {
-				if e := b.activeMouseEmitter.Load(); e != nil && lParam != nil {
+			if nCode >= 0 && lParam != nil {
+				// Cursor cache update runs unconditionally so CursorPos
+				// can serve from cache while a listener is active. Pt
+				// is documented to be valid for every WH_MOUSE_LL
+				// callback regardless of message type.
+				p := Point{X: int(lParam.Pt.X), Y: int(lParam.Pt.Y)}
+				b.cachedCursor.Store(&p)
+				if e := b.activeMouseEmitter.Load(); e != nil {
 					if event, ok := mouseHookEvent(uint32(wParam), lParam); ok {
 						e.emit(event)
 					}
@@ -208,7 +214,10 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 			done <- nil
 			return
 		}
-		hooks = append(hooks, installed{hook: hook, release: func() { b.activeMouseEmitter.Store(nil) }})
+		hooks = append(hooks, installed{hook: hook, release: func() {
+			b.activeMouseEmitter.Store(nil)
+			b.cachedCursor.Store(nil)
+		}})
 	}
 
 	if opts.Mask&ListenKeyboard != 0 {

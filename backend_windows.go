@@ -81,6 +81,14 @@ type winBackend struct {
 	activeKbdEmitter   atomic.Pointer[hookEmitter]
 	activeRawEmitter   atomic.Pointer[hookEmitter]
 
+	// cachedCursor is the most recent cursor position observed by an
+	// active mouse hook listener. Populated by the LL mouse hook on
+	// every event (Pt is always present per WM_MOUSE_LL docs); read by
+	// CursorPos as a fast path that skips the GetCursorPos syscall when
+	// a listener is keeping the cache fresh. Cleared on listener stop
+	// to prevent stale reads.
+	cachedCursor atomic.Pointer[Point]
+
 	// Raw-input window class is registered lazily once per backend and
 	// torn down in Close. Each Listen call creates its own ephemeral
 	// window of this class.
@@ -192,6 +200,12 @@ func (b *winBackend) ScreenSize(ctx context.Context) (Point, error) {
 func (b *winBackend) CursorPos(ctx context.Context) (Point, error) {
 	if err := checkContext(ctx); err != nil {
 		return Point{}, err
+	}
+
+	if b.activeMouseEmitter.Load() != nil {
+		if cached := b.cachedCursor.Load(); cached != nil {
+			return *cached, nil
+		}
 	}
 
 	var p winPoint
