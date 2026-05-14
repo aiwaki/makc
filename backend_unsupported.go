@@ -25,6 +25,9 @@ func (unsupportedBackend) CursorPos(context.Context) (Point, error) {
 func (unsupportedBackend) MouseButtonState(context.Context, MouseButton) (State, error) {
 	return Up, unsupported("mouse state")
 }
+func (unsupportedBackend) MouseSystemSpeed(context.Context) (int, error) {
+	return 0, unsupported("system mouse speed")
+}
 func (unsupportedBackend) InjectMouse(context.Context, []MouseEvent) error {
 	return unsupported("mouse injection")
 }

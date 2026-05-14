@@ -137,6 +137,13 @@ func (b *linuxBackend) CursorPos(ctx context.Context) (Point, error) {
 	return b.x11.cursorPos(ctx)
 }
 
+func (b *linuxBackend) MouseSystemSpeed(ctx context.Context) (int, error) {
+	if err := checkContext(ctx); err != nil {
+		return 0, err
+	}
+	return 0, unsupported("system mouse speed query is not implemented on Linux")
+}
+
 func (b *linuxBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
 	code, err := linuxMouseButton(button)
 	if err != nil {

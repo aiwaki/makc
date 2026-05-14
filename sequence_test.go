@@ -174,6 +174,10 @@ func (b *sequenceTestBackend) MouseButtonState(context.Context, MouseButton) (St
 	return Up, nil
 }
 
+func (b *sequenceTestBackend) MouseSystemSpeed(context.Context) (int, error) {
+	return 0, ErrUnsupported
+}
+
 func (b *sequenceTestBackend) InjectMouse(_ context.Context, events []MouseEvent) error {
 	b.order = append(b.order, "mouse")
 	b.mouseEvents = append(b.mouseEvents, append([]MouseEvent(nil), events...))

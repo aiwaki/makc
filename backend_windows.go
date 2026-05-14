@@ -45,6 +45,8 @@ const (
 	smCXVirtualScreen = 78
 	smCYVirtualScreen = 79
 
+	spiGetMouseSpeed = 0x0070
+
 	vkLeftButton   = 0x01
 	vkRightButton  = 0x02
 	vkMiddleButton = 0x04
@@ -197,6 +199,17 @@ func (b *winBackend) CursorPos(ctx context.Context) (Point, error) {
 		return Point{}, err
 	}
 	return Point{X: int(p.X), Y: int(p.Y)}, nil
+}
+
+func (b *winBackend) MouseSystemSpeed(ctx context.Context) (int, error) {
+	if err := checkContext(ctx); err != nil {
+		return 0, err
+	}
+	var speed uint32
+	if err := b.api.systemParametersInfo(spiGetMouseSpeed, 0, unsafe.Pointer(&speed), 0); err != nil {
+		return 0, err
+	}
+	return int(speed), nil
 }
 
 func (b *winBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
@@ -603,6 +616,7 @@ type winAPI struct {
 	procUnhookWindowsHookEx     *windows.LazyProc
 	procGetMessage              *windows.LazyProc
 	procPostThreadMessage       *windows.LazyProc
+	procSystemParametersInfo    *windows.LazyProc
 
 	hasInjectMouseInput    bool
 	hasInjectKeyboardInput bool
@@ -636,6 +650,7 @@ func newWinAPI() (*winAPI, error) {
 		{&api.procUnhookWindowsHookEx, "UnhookWindowsHookEx"},
 		{&api.procGetMessage, "GetMessageW"},
 		{&api.procPostThreadMessage, "PostThreadMessageW"},
+		{&api.procSystemParametersInfo, "SystemParametersInfoW"},
 	}
 	for _, p := range required {
 		proc := user32.NewProc(p.name)
@@ -809,6 +824,14 @@ func (a *winAPI) getMessage(msg *winMsg, hwnd uintptr, filterMin, filterMax uint
 
 func (a *winAPI) postThreadMessage(threadID uint32, msg uint32, wParam, lParam uintptr) {
 	_, _, _ = a.procPostThreadMessage.Call(uintptr(threadID), uintptr(msg), wParam, lParam)
+}
+
+func (a *winAPI) systemParametersInfo(action uint32, param uint32, pv unsafe.Pointer, winIni uint32) error {
+	r, _, e := a.procSystemParametersInfo.Call(uintptr(action), uintptr(param), uintptr(pv), uintptr(winIni))
+	if r == 0 {
+		return fmt.Errorf("makc: SystemParametersInfoW(0x%X) failed: %w", action, errnoOrDefault(e))
+	}
+	return nil
 }
 
 type winPoint struct {

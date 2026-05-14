@@ -146,6 +146,13 @@ func (b *darwinBackend) CursorPos(ctx context.Context) (Point, error) {
 	return Point{X: int(math.Round(location.X)), Y: int(math.Round(location.Y))}, nil
 }
 
+func (b *darwinBackend) MouseSystemSpeed(ctx context.Context) (int, error) {
+	if err := checkContext(ctx); err != nil {
+		return 0, err
+	}
+	return 0, unsupported("system mouse speed query is not implemented on macOS")
+}
+
 func (b *darwinBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
 	if err := checkContext(ctx); err != nil {
 		return Up, err
