@@ -107,7 +107,29 @@ type config struct {
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 	inputTag          uintptr
+	mouseMotionFlags  MouseMotionFlag
 }
+
+// MouseMotionFlag is a bitset of platform-specific mouse motion tuning hints.
+// Hints unsupported by the current backend are ignored — passing them on a
+// platform that does not implement them is not an error.
+type MouseMotionFlag uint8
+
+const (
+	// MouseMotionNoCoalesce disables operating-system coalescing of rapid
+	// mouse move events. Maps to Win32 MOUSEEVENTF_MOVE_NOCOALESCE; ignored
+	// on macOS and Linux. Use when each move event matters at high
+	// frequencies, e.g. gesture capture or sub-pixel automation.
+	MouseMotionNoCoalesce MouseMotionFlag = 1 << iota
+
+	// MouseMotionVirtualDesk treats absolute mouse coordinates as positions
+	// on the entire multi-monitor virtual desktop instead of the primary
+	// screen. Maps to Win32 MOUSEEVENTF_VIRTUALDESK; ignored on macOS and
+	// Linux. The Windows backend uses SM_CXVIRTUALSCREEN /
+	// SM_CYVIRTUALSCREEN with SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN as the
+	// origin when this flag is set.
+	MouseMotionVirtualDesk
+)
 
 // Option configures a Client.
 type Option func(*config)
@@ -124,6 +146,15 @@ func WithMouseInjection(backend MouseInjectionBackend) Option {
 func WithKeyboardInjection(backend KeyboardInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.keyboardInjection = backend
+	}
+}
+
+// WithMouseMotion enables additional mouse motion tuning hints. Pass an OR
+// of MouseMotionFlag values. Hints not supported by the current backend are
+// silently ignored.
+func WithMouseMotion(flags MouseMotionFlag) Option {
+	return func(cfg *config) {
+		cfg.mouseMotionFlags |= flags
 	}
 }
 

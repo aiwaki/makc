@@ -22,21 +22,27 @@ const (
 	keyeventfUnicode     = 0x0004
 	keyeventfScanCode    = 0x0008
 
-	mouseeventfMove       = 0x0001
-	mouseeventfLeftDown   = 0x0002
-	mouseeventfLeftUp     = 0x0004
-	mouseeventfRightDown  = 0x0008
-	mouseeventfRightUp    = 0x0010
-	mouseeventfMiddleDown = 0x0020
-	mouseeventfMiddleUp   = 0x0040
-	mouseeventfXDown      = 0x0080
-	mouseeventfXUp        = 0x0100
-	mouseeventfWheel      = 0x0800
-	mouseeventfHWheel     = 0x01000
-	mouseeventfAbsolute   = 0x8000
+	mouseeventfMove            = 0x0001
+	mouseeventfLeftDown        = 0x0002
+	mouseeventfLeftUp          = 0x0004
+	mouseeventfRightDown       = 0x0008
+	mouseeventfRightUp         = 0x0010
+	mouseeventfMiddleDown      = 0x0020
+	mouseeventfMiddleUp        = 0x0040
+	mouseeventfXDown           = 0x0080
+	mouseeventfXUp             = 0x0100
+	mouseeventfWheel           = 0x0800
+	mouseeventfHWheel          = 0x01000
+	mouseeventfMoveNoCoalesce  = 0x2000
+	mouseeventfVirtualDesk     = 0x4000
+	mouseeventfAbsolute        = 0x8000
 
-	smCXScreen = 0
-	smCYScreen = 1
+	smCXScreen        = 0
+	smCYScreen        = 1
+	smXVirtualScreen  = 76
+	smYVirtualScreen  = 77
+	smCXVirtualScreen = 78
+	smCYVirtualScreen = 79
 
 	vkLeftButton   = 0x01
 	vkRightButton  = 0x02
@@ -53,6 +59,7 @@ type winBackend struct {
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 	inputTag          uintptr
+	mouseMotionFlags  MouseMotionFlag
 }
 
 func newSystemBackend(cfg config) (systemBackend, error) {
@@ -108,6 +115,7 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
 		inputTag:          cfg.inputTag,
+		mouseMotionFlags:  cfg.mouseMotionFlags,
 	}, nil
 }
 
@@ -427,10 +435,29 @@ func (b *winBackend) mouseMoveInput(move MouseMove, extraInfo uintptr) injectedM
 	dy := int32(move.Y)
 	flags := uint32(mouseeventfMove)
 
+	if b.mouseMotionFlags&MouseMotionNoCoalesce != 0 {
+		flags |= mouseeventfMoveNoCoalesce
+	}
+
 	if !move.Relative {
 		flags |= mouseeventfAbsolute
-		dx = absoluteMouseCoordinate(dx, b.api.getSystemMetrics(smCXScreen))
-		dy = absoluteMouseCoordinate(dy, b.api.getSystemMetrics(smCYScreen))
+		// Per MSDN, MOUSEEVENTF_VIRTUALDESK requires MOUSEEVENTF_ABSOLUTE
+		// and reinterprets the coordinate space as the union of all
+		// monitors (origin = SM_XVIRTUALSCREEN, size =
+		// SM_CXVIRTUALSCREEN). For relative moves, VIRTUALDESK is a no-op
+		// because relative deltas don't carry coordinate-space semantics.
+		if b.mouseMotionFlags&MouseMotionVirtualDesk != 0 {
+			flags |= mouseeventfVirtualDesk
+			originX := b.api.getSystemMetrics(smXVirtualScreen)
+			originY := b.api.getSystemMetrics(smYVirtualScreen)
+			width := b.api.getSystemMetrics(smCXVirtualScreen)
+			height := b.api.getSystemMetrics(smCYVirtualScreen)
+			dx = absoluteMouseCoordinate(dx-originX, width)
+			dy = absoluteMouseCoordinate(dy-originY, height)
+		} else {
+			dx = absoluteMouseCoordinate(dx, b.api.getSystemMetrics(smCXScreen))
+			dy = absoluteMouseCoordinate(dy, b.api.getSystemMetrics(smCYScreen))
+		}
 	}
 
 	return injectedMouseInput{
