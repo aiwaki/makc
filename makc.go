@@ -135,14 +135,20 @@ const (
 type Option func(*config)
 
 // WithMouseInjection selects the backend used by Mouse movement and button
-// injection.
+// injection from the platform-agnostic enum. Use this when the backend is
+// chosen at runtime (e.g. a CLI flag or config value). For statically
+// platform-specific code prefer the typed per-OS constructors —
+// WithMouseSendInput, WithMouseCGEvent, WithMouseUInput, ... — which fail
+// to compile on a build that does not support the chosen backend.
 func WithMouseInjection(backend MouseInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.mouseInjection = backend
 	}
 }
 
-// WithKeyboardInjection selects the backend used by Keyboard injection.
+// WithKeyboardInjection is the keyboard counterpart of WithMouseInjection.
+// Same trade-off: runtime-flexible vs the typed per-OS WithKeyboardSendInput
+// / WithKeyboardCGEvent / WithKeyboardUInput.
 func WithKeyboardInjection(backend KeyboardInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.keyboardInjection = backend
