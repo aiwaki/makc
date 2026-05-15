@@ -2,6 +2,7 @@ package makc
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -158,6 +159,24 @@ type Listener struct {
 	done   <-chan error
 	cancel context.CancelFunc
 	stats  *listenerStats
+
+	// Wait coordination. waitOnce runs the single drain of done into
+	// waitErr; waitDone broadcasts completion to repeat callers so
+	// Listener.Wait can be called more than once without hanging on the
+	// already-drained one-shot done channel.
+	waitOnce sync.Once
+	waitErr  error
+	waitDone chan struct{}
+}
+
+func newListener(events <-chan InputEvent, done <-chan error, cancel context.CancelFunc, stats *listenerStats) *Listener {
+	return &Listener{
+		Events:   events,
+		done:     done,
+		cancel:   cancel,
+		stats:    stats,
+		waitDone: make(chan struct{}),
+	}
 }
 
 // ListenerStats reports counters maintained by an active or finished listener.
@@ -203,12 +222,26 @@ func (l *Listener) Close() {
 	l.cancel()
 }
 
-// Wait blocks until the listener stops.
+// Wait blocks until the listener stops and returns the listener's exit
+// error. Safe to call from multiple goroutines and to call repeatedly:
+// the first call drains the underlying done channel, subsequent calls
+// observe the broadcast and return the same cached error.
 func (l *Listener) Wait() error {
-	if l == nil || l.done == nil {
+	if l == nil {
 		return nil
 	}
-	return <-l.done
+	l.waitOnce.Do(func() {
+		if l.done != nil {
+			l.waitErr = <-l.done
+		}
+		if l.waitDone != nil {
+			close(l.waitDone)
+		}
+	})
+	if l.waitDone != nil {
+		<-l.waitDone
+	}
+	return l.waitErr
 }
 
 // Listen starts an input listener.

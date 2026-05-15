@@ -148,12 +148,7 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 			cancel()
 			return nil, err
 		}
-		return &Listener{
-			Events: events,
-			done:   done,
-			cancel: cancel,
-			stats:  stats,
-		}, nil
+		return newListener(events, done, cancel, stats), nil
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()

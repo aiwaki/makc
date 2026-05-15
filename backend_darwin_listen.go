@@ -189,12 +189,7 @@ func (b *darwinBackend) ListenInput(ctx context.Context, opts ListenOptions) (*L
 			b.activeListener.Store(false)
 			return nil, err
 		}
-		return &Listener{
-			Events: events,
-			done:   done,
-			cancel: cancel,
-			stats:  stats,
-		}, nil
+		return newListener(events, done, cancel, stats), nil
 	case <-ctx.Done():
 		cancel()
 		b.activeListener.Store(false)

@@ -97,12 +97,7 @@ func linuxListenEvdev(ctx context.Context, opts ListenOptions) (*Listener, error
 	stats := newListenerStats()
 	go runLinuxEvdevListener(ctx, opts, stats, devices, events, done)
 
-	return &Listener{
-		Events: events,
-		done:   done,
-		cancel: cancel,
-		stats:  stats,
-	}, nil
+	return newListener(events, done, cancel, stats), nil
 }
 
 func openLinuxEvdevDevices(mask ListenMask) ([]*linuxEvdevDevice, error) {
