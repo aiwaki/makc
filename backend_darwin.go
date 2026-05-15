@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/bits"
 	"sync"
+	"sync/atomic"
 	"unicode/utf16"
 
 	"github.com/ebitengine/purego"
@@ -54,6 +55,20 @@ type darwinBackend struct {
 
 	mu                 sync.Mutex
 	pressedMouseButton uint32
+
+	// Listener state. listenAPI bundles Quartz/CoreFoundation symbols
+	// resolved lazily on first ListenInput call. tapCallback is the
+	// singleton purego.NewCallback thunk that routes through
+	// activeTapDispatcher (analogous to the Windows hook callback
+	// architecture). activeListener gates against concurrent listeners
+	// because CGEventTap places one tap per port.
+	listenAPIOnce       sync.Once
+	listenAPIErr        error
+	listenAPI           *darwinListenAPI
+	tapCallbackOnce     sync.Once
+	tapCallback         uintptr
+	activeTapDispatcher atomic.Pointer[tapDispatcher]
+	activeListener      atomic.Bool
 }
 
 func newSystemBackend(cfg config) (systemBackend, error) {
@@ -108,6 +123,10 @@ func (b *darwinBackend) Close() error {
 	if b.cgSource != 0 {
 		b.api.cfRelease(b.cgSource)
 		b.cgSource = 0
+	}
+	if b.listenAPI != nil && b.listenAPI.commonModesRef != 0 {
+		b.api.cfRelease(b.listenAPI.commonModesRef)
+		b.listenAPI.commonModesRef = 0
 	}
 	return nil
 }
@@ -272,10 +291,6 @@ func (b *darwinBackend) InjectKeyboard(ctx context.Context, events []KeyboardEve
 		}
 	}
 	return nil
-}
-
-func (b *darwinBackend) ListenInput(context.Context, ListenOptions) (*Listener, error) {
-	return nil, unsupported("macOS input listening is not implemented")
 }
 
 func (b *darwinBackend) requireAccessibility(operation string) error {
