@@ -28,7 +28,14 @@ const (
 
 // Tap location, placement, and option constants.
 const (
+	// Tap location. HID-level taps see real hardware events but not the
+	// synthetic events that other userspace processes post via
+	// CGEventPost — including our own injection path. Session-level
+	// taps see both real input AND synthetics that reach the login
+	// session, which is what makc users want when they install a
+	// listener and inject in the same process.
 	cgHIDEventTap              = 0
+	cgSessionEventTap          = 1
 	cgHeadInsertEventTap       = 0
 	cgEventTapOptionListenOnly = 1
 )
@@ -68,6 +75,7 @@ const (
 type darwinListenAPI struct {
 	cgEventTapCreate              func(uint32, uint32, uint32, uint64, uintptr, unsafe.Pointer) uintptr
 	cgEventTapEnable              func(uintptr, bool)
+	cgEventTapIsEnabled           func(uintptr) bool
 	cgEventGetType                func(uintptr) uint32
 	cgEventGetFlags               func(uintptr) uint64
 	cgEventGetLocation            func(uintptr) cgPoint
@@ -80,13 +88,26 @@ type darwinListenAPI struct {
 	cfRunLoopRunInMode            func(uintptr, float64, bool) int32
 	cfRunLoopStop                 func(uintptr)
 
-	// commonModesRef is a CFString built with CFStringCreateWithCString
-	// containing "kCFRunLoopCommonModes". CFRunLoop matches modes by
-	// string equality (CFEqual), so a self-built CFString with the same
-	// content works as an alias for the kCFRunLoopCommonModes global —
-	// and avoids the unsafe.Pointer(uintptr) Dlsym dereference that vet
-	// flags as a possible misuse.
+	// commonModesRef is the CFString "kCFRunLoopCommonModes". Used with
+	// CFRunLoopAddSource/CFRunLoopRemoveSource: a source registered in
+	// the common-modes set is automatically added to every mode that's
+	// currently a member of the set (default mode, modal panel mode,
+	// event tracking mode, etc).
+	//
+	// defaultModeRef is the CFString "kCFRunLoopDefaultMode". Used with
+	// CFRunLoopRunInMode: that call requires a real mode name, NOT the
+	// common-modes marker — passing kCFRunLoopCommonModes triggers the
+	// "invalid mode 'kCFRunLoopCommonModes' provided to
+	// CFRunLoopRunSpecific" warning at startup. The source is added via
+	// commonModesRef so events still flow into the default-mode loop.
+	//
+	// Both CFStrings are built locally via CFStringCreateWithCString.
+	// CFRunLoop matches modes by CFEqual, so a self-built CFString with
+	// the documented content acts as an alias for the global — without
+	// dereferencing the const symbols (purego/Dlsym on data symbols is
+	// fragile and vet-noisy).
 	commonModesRef uintptr
+	defaultModeRef uintptr
 }
 
 // kCFStringEncodingASCII = 0x0600. ASCII is sufficient for the mode name.
@@ -113,6 +134,7 @@ func (b *darwinBackend) ensureListenAPI() error {
 		}{
 			{appServices, &la.cgEventTapCreate, "CGEventTapCreate"},
 			{appServices, &la.cgEventTapEnable, "CGEventTapEnable"},
+			{appServices, &la.cgEventTapIsEnabled, "CGEventTapIsEnabled"},
 			{appServices, &la.cgEventGetType, "CGEventGetType"},
 			{appServices, &la.cgEventGetFlags, "CGEventGetFlags"},
 			{appServices, &la.cgEventGetLocation, "CGEventGetLocation"},
@@ -134,13 +156,19 @@ func (b *darwinBackend) ensureListenAPI() error {
 			purego.RegisterFunc(bind.fptr, proc)
 		}
 
-		// Build the CFString for kCFRunLoopCommonModes ourselves rather
-		// than dereferencing the global symbol — see commonModesRef
-		// docs for rationale.
-		modeName := []byte("kCFRunLoopCommonModes\x00")
-		la.commonModesRef = la.cfStringCreateWithCString(0, &modeName[0], kCFStringEncodingASCII)
+		// Build CFStrings for the run-loop modes we use. See doc on
+		// commonModesRef / defaultModeRef for why these are built
+		// locally instead of dereferencing the global symbols.
+		commonName := []byte("kCFRunLoopCommonModes\x00")
+		la.commonModesRef = la.cfStringCreateWithCString(0, &commonName[0], kCFStringEncodingASCII)
 		if la.commonModesRef == 0 {
 			b.listenAPIErr = errors.New("makc: CFStringCreateWithCString(kCFRunLoopCommonModes) failed")
+			return
+		}
+		defaultName := []byte("kCFRunLoopDefaultMode\x00")
+		la.defaultModeRef = la.cfStringCreateWithCString(0, &defaultName[0], kCFStringEncodingASCII)
+		if la.defaultModeRef == 0 {
+			b.listenAPIErr = errors.New("makc: CFStringCreateWithCString(kCFRunLoopDefaultMode) failed")
 			return
 		}
 
@@ -239,7 +267,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 
 	b.ensureTapCallback()
 	tapPort := api.cgEventTapCreate(
-		cgHIDEventTap,
+		cgSessionEventTap,
 		cgHeadInsertEventTap,
 		cgEventTapOptionListenOnly,
 		mask,
@@ -262,12 +290,32 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	}
 
 	runLoop := api.cfRunLoopGetCurrent()
-	api.cfRunLoopAddSource(runLoop, source, api.commonModesRef)
+	// Attach the source to the concrete default mode rather than to
+	// kCFRunLoopCommonModes. CommonModes is a placeholder that adds the
+	// source to whatever modes have been *registered* as common — and a
+	// freshly-created runloop on a goroutine-pinned OS thread has no
+	// modes registered as common yet, so the source ends up attached to
+	// nothing and the callback never fires. Default mode is always
+	// available on any runloop.
+	api.cfRunLoopAddSource(runLoop, source, api.defaultModeRef)
 	api.cgEventTapEnable(tapPort, true)
+	// CGEventTapCreate succeeds and returns a port even when the process
+	// lacks Input Monitoring permission (Big Sur+); the tap is created
+	// but events never reach the callback. CGEventTapIsEnabled returns
+	// false in that state, giving us the only programmatic signal that
+	// the missing permission is the cause of the silent listener.
+	if !api.cgEventTapIsEnabled(tapPort) {
+		api.cfRunLoopRemoveSource(runLoop, source, api.defaultModeRef)
+		b.api.cfRelease(source)
+		b.api.cfRelease(tapPort)
+		ready <- errors.New("makc: CGEventTap is disabled — grant your binary Input Monitoring permission in System Settings → Privacy & Security → Input Monitoring")
+		done <- nil
+		return
+	}
 
 	cleanup := func() {
 		api.cgEventTapEnable(tapPort, false)
-		api.cfRunLoopRemoveSource(runLoop, source, api.commonModesRef)
+		api.cfRunLoopRemoveSource(runLoop, source, api.defaultModeRef)
 		b.api.cfRelease(source)
 		b.api.cfRelease(tapPort)
 	}
@@ -285,7 +333,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	// indefinitely otherwise.
 	const slice = 0.25 // seconds
 	for {
-		result := api.cfRunLoopRunInMode(api.commonModesRef, slice, false)
+		result := api.cfRunLoopRunInMode(api.defaultModeRef, slice, false)
 		if result == cfRunLoopRunStopped || result == cfRunLoopRunFinished {
 			break
 		}
