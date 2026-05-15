@@ -33,11 +33,11 @@ import (
 // ≥ 0.16 with portal-wlr).
 
 const (
-	portalDestination     = "org.freedesktop.portal.Desktop"
-	portalObjectPath      = "/org/freedesktop/portal/desktop"
-	portalRemoteDesktop   = "org.freedesktop.portal.RemoteDesktop"
-	portalRequestIface    = "org.freedesktop.portal.Request"
-	portalSessionIface    = "org.freedesktop.portal.Session"
+	portalDestination       = "org.freedesktop.portal.Desktop"
+	portalObjectPath        = "/org/freedesktop/portal/desktop"
+	portalRemoteDesktop     = "org.freedesktop.portal.RemoteDesktop"
+	portalRequestIface      = "org.freedesktop.portal.Request"
+	portalSessionIface      = "org.freedesktop.portal.Session"
 	portalRequestPathPrefix = "/org/freedesktop/portal/desktop/request"
 
 	portalDeviceKeyboard uint32 = 1

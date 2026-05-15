@@ -23,20 +23,20 @@ const (
 	keyeventfUnicode     = 0x0004
 	keyeventfScanCode    = 0x0008
 
-	mouseeventfMove            = 0x0001
-	mouseeventfLeftDown        = 0x0002
-	mouseeventfLeftUp          = 0x0004
-	mouseeventfRightDown       = 0x0008
-	mouseeventfRightUp         = 0x0010
-	mouseeventfMiddleDown      = 0x0020
-	mouseeventfMiddleUp        = 0x0040
-	mouseeventfXDown           = 0x0080
-	mouseeventfXUp             = 0x0100
-	mouseeventfWheel           = 0x0800
-	mouseeventfHWheel          = 0x01000
-	mouseeventfMoveNoCoalesce  = 0x2000
-	mouseeventfVirtualDesk     = 0x4000
-	mouseeventfAbsolute        = 0x8000
+	mouseeventfMove           = 0x0001
+	mouseeventfLeftDown       = 0x0002
+	mouseeventfLeftUp         = 0x0004
+	mouseeventfRightDown      = 0x0008
+	mouseeventfRightUp        = 0x0010
+	mouseeventfMiddleDown     = 0x0020
+	mouseeventfMiddleUp       = 0x0040
+	mouseeventfXDown          = 0x0080
+	mouseeventfXUp            = 0x0100
+	mouseeventfWheel          = 0x0800
+	mouseeventfHWheel         = 0x01000
+	mouseeventfMoveNoCoalesce = 0x2000
+	mouseeventfVirtualDesk    = 0x4000
+	mouseeventfAbsolute       = 0x8000
 
 	smCXScreen        = 0
 	smCYScreen        = 1
@@ -92,10 +92,10 @@ type winBackend struct {
 	// Raw-input window class is registered lazily once per backend and
 	// torn down in Close. Each Listen call creates its own ephemeral
 	// window of this class.
-	rawClassOnce  sync.Once
-	rawClassErr   error
-	rawClassName  *uint16
-	rawClassAtom  uint16
+	rawClassOnce sync.Once
+	rawClassErr  error
+	rawClassName *uint16
+	rawClassAtom uint16
 }
 
 // hookEmitter is the per-Listen receiver wired into the singleton hook

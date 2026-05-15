@@ -28,8 +28,8 @@ const (
 
 // Tap location, placement, and option constants.
 const (
-	cgHIDEventTap            = 0
-	cgHeadInsertEventTap     = 0
+	cgHIDEventTap              = 0
+	cgHeadInsertEventTap       = 0
 	cgEventTapOptionListenOnly = 1
 )
 
@@ -46,11 +46,11 @@ const (
 // CGEventFlags bits for modifier keys. Used by the FlagsChanged handler
 // to derive up/down state from the post-change flag word.
 const (
-	cgFlagMaskAlphaShift = 0x00010000 // Caps Lock
-	cgFlagMaskShift      = 0x00020000
-	cgFlagMaskControl    = 0x00040000
-	cgFlagMaskAlternate  = 0x00080000 // Option
-	cgFlagMaskCommand    = 0x00100000
+	cgFlagMaskAlphaShift  = 0x00010000 // Caps Lock
+	cgFlagMaskShift       = 0x00020000
+	cgFlagMaskControl     = 0x00040000
+	cgFlagMaskAlternate   = 0x00080000 // Option
+	cgFlagMaskCommand     = 0x00100000
 	cgFlagMaskSecondaryFn = 0x00800000
 )
 
