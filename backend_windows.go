@@ -888,7 +888,24 @@ type keyboardInput struct {
 	DwExtraInfo uintptr
 }
 
+// input mirrors the Win32 INPUT struct. The C type is a tagged union of
+// MOUSEINPUT, KEYBDINPUT, and HARDWAREINPUT; we model it with a single
+// Mi (MOUSEINPUT) field because it is the largest of the three on every
+// supported architecture, and rely on Go's struct alignment rules to
+// match Win32's layout (offset 4 on x86, offset 8 on x64). Non-MOUSEINPUT
+// payloads are written into the same memory via unsafe.Pointer.
+//
+// The compile-time assertions below reject any future regression where a
+// payload grows past Mi's footprint and would corrupt the INPUT layout.
 type input struct {
 	Type uint32
 	Mi   mouseInput
 }
+
+// Static asserts: every payload must fit in mouseInput. If sizeof exceeds,
+// the array length goes negative and the build fails. unsafe.Sizeof is a
+// constant expression, so this costs nothing at runtime.
+var (
+	_ [unsafe.Sizeof(mouseInput{}) - unsafe.Sizeof(keyboardInput{})]byte
+	_ [unsafe.Sizeof(mouseInput{}) - unsafe.Sizeof(injectedMouseInput{})]byte
+)
