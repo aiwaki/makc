@@ -250,7 +250,15 @@ func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, stats *liste
 		}
 	}
 
-	done <- nil
+	// Loop fell out because every device was pruned. Distinguish a
+	// graceful shutdown (ctx cancelled) from a silent disconnect — the
+	// latter previously returned nil and the caller had no way to tell
+	// the listener had died.
+	if ctx.Err() != nil {
+		done <- nil
+		return
+	}
+	done <- errors.New("makc: every evdev device disconnected; reopen the client to recover")
 }
 
 func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) error {
