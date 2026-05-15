@@ -42,6 +42,7 @@ const (
 type linuxBackend struct {
 	device            *uinputDevice
 	x11               *linuxX11Display
+	portal            *portalInjector
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 
@@ -59,7 +60,7 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	switch mouseInjection {
 	case MouseInjectionAuto:
 		mouseInjection = MouseInjectionUInput
-	case MouseInjectionUInput:
+	case MouseInjectionUInput, MouseInjectionXDGPortal:
 	case MouseInjectionSendInput, MouseInjectionInjectMouseInput:
 		return nil, unsupported("Win32 mouse injection backends are only available on Windows")
 	case MouseInjectionCGEvent:
@@ -72,7 +73,7 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	switch keyboardInjection {
 	case KeyboardInjectionAuto:
 		keyboardInjection = KeyboardInjectionUInput
-	case KeyboardInjectionUInput:
+	case KeyboardInjectionUInput, KeyboardInjectionXDGPortal:
 	case KeyboardInjectionSendInput, KeyboardInjectionInjectKeyboardInput:
 		return nil, unsupported("Win32 keyboard injection backends are only available on Windows")
 	case KeyboardInjectionCGEvent:
@@ -81,9 +82,40 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		return nil, fmt.Errorf("makc: unknown keyboard injection backend %d", cfg.keyboardInjection)
 	}
 
-	device, err := newUInputDevice()
-	if err != nil {
-		return nil, err
+	usesPortal := mouseInjection == MouseInjectionXDGPortal || keyboardInjection == KeyboardInjectionXDGPortal
+	usesUInput := mouseInjection == MouseInjectionUInput || keyboardInjection == KeyboardInjectionUInput
+
+	var device *uinputDevice
+	if usesUInput {
+		dev, err := newUInputDevice()
+		if err != nil {
+			return nil, err
+		}
+		device = dev
+	}
+
+	var portal *portalInjector
+	if usesPortal {
+		mask := uint32(0)
+		if mouseInjection == MouseInjectionXDGPortal {
+			mask |= portalDevicePointer
+		}
+		if keyboardInjection == KeyboardInjectionXDGPortal {
+			mask |= portalDeviceKeyboard
+		}
+		// Allow up to 60s for the user to interact with the permission
+		// dialog the portal Start step renders. Open is the only place
+		// this dialog appears for the lifetime of the client.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		p, err := openPortalInjector(ctx, mask)
+		cancel()
+		if err != nil {
+			if device != nil {
+				_ = device.Close()
+			}
+			return nil, err
+		}
+		portal = p
 	}
 
 	x11, _ := newLinuxX11Display()
@@ -91,6 +123,7 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	return &linuxBackend{
 		device:            device,
 		x11:               x11,
+		portal:            portal,
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
 	}, nil
@@ -105,9 +138,17 @@ func (b *linuxBackend) Close() error {
 	b.stateDevices = nil
 	b.stateLoaded = false
 	b.stateMu.Unlock()
+	var deviceErr, portalErr error
+	if b.device != nil {
+		deviceErr = b.device.Close()
+	}
+	if b.portal != nil {
+		portalErr = b.portal.Close()
+	}
 	return errors.Join(
-		b.device.Close(),
+		deviceErr,
 		b.x11.Close(),
+		portalErr,
 	)
 }
 
@@ -167,6 +208,13 @@ func (b *linuxBackend) InjectMouse(ctx context.Context, events []MouseEvent) err
 	if len(events) == 0 {
 		return nil
 	}
+	if b.mouseInjection == MouseInjectionXDGPortal {
+		return b.injectMousePortal(ctx, events)
+	}
+	return b.injectMouseUInput(ctx, events)
+}
+
+func (b *linuxBackend) injectMouseUInput(ctx context.Context, events []MouseEvent) error {
 	for _, event := range events {
 		if err := checkContext(ctx); err != nil {
 			return err
@@ -175,7 +223,7 @@ func (b *linuxBackend) InjectMouse(ctx context.Context, events []MouseEvent) err
 		case MouseEventMove:
 			if !event.Move.Relative {
 				if b.x11 == nil {
-					return unsupported("linux absolute mouse movement requires an X11 DISPLAY")
+					return unsupported("linux absolute mouse movement requires an X11 DISPLAY (use the XDGPortal mouse backend on Wayland)")
 				}
 				if err := b.x11.movePointer(ctx, Point{X: event.Move.X, Y: event.Move.Y}); err != nil {
 					return err
@@ -211,6 +259,47 @@ func (b *linuxBackend) InjectMouse(ctx context.Context, events []MouseEvent) err
 	return nil
 }
 
+func (b *linuxBackend) injectMousePortal(ctx context.Context, events []MouseEvent) error {
+	for _, event := range events {
+		if err := checkContext(ctx); err != nil {
+			return err
+		}
+		switch event.Kind {
+		case MouseEventMove:
+			if event.Move.Relative {
+				if err := b.portal.pointerMotion(ctx, float64(event.Move.X), float64(event.Move.Y)); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := b.portal.pointerMotionAbsolute(ctx, float64(event.Move.X), float64(event.Move.Y)); err != nil {
+				return err
+			}
+		case MouseEventButton:
+			if !event.State.valid() {
+				return errors.New("makc: mouse button state is unknown")
+			}
+			if err := b.portal.pointerButton(ctx, event.Button, event.State); err != nil {
+				return err
+			}
+		case MouseEventWheel:
+			// Portal expects axis values in fractional units; -120 / +120
+			// quantization stays consistent with the rest of the
+			// codebase (see WheelDelta).
+			if err := b.portal.pointerAxis(ctx, 0, float64(event.Delta)); err != nil {
+				return err
+			}
+		case MouseEventHWheel:
+			if err := b.portal.pointerAxis(ctx, float64(event.Delta), 0); err != nil {
+				return err
+			}
+		default:
+			return unsupported("unknown mouse event")
+		}
+	}
+	return nil
+}
+
 func (b *linuxBackend) KeyState(ctx context.Context, key Key) (State, error) {
 	code, err := linuxKeyCode(key)
 	if err != nil {
@@ -230,6 +319,13 @@ func (b *linuxBackend) InjectKeyboard(ctx context.Context, events []KeyboardEven
 	if len(events) == 0 {
 		return nil
 	}
+	if b.keyboardInjection == KeyboardInjectionXDGPortal {
+		return b.injectKeyboardPortal(ctx, events)
+	}
+	return b.injectKeyboardUInput(ctx, events)
+}
+
+func (b *linuxBackend) injectKeyboardUInput(ctx context.Context, events []KeyboardEvent) error {
 	for _, event := range events {
 		if err := checkContext(ctx); err != nil {
 			return err
@@ -252,6 +348,42 @@ func (b *linuxBackend) InjectKeyboard(ctx context.Context, events []KeyboardEven
 			}
 		case KeyboardEventText:
 			return unsupported("linux uinput backend does not support Unicode text injection")
+		default:
+			return unsupported("unknown keyboard event")
+		}
+	}
+	return nil
+}
+
+func (b *linuxBackend) injectKeyboardPortal(ctx context.Context, events []KeyboardEvent) error {
+	for _, event := range events {
+		if err := checkContext(ctx); err != nil {
+			return err
+		}
+		switch event.Kind {
+		case KeyboardEventKey:
+			code, err := linuxKeyCode(event.Key)
+			if err != nil {
+				return err
+			}
+			if !event.State.valid() {
+				return errors.New("makc: key state is unknown")
+			}
+			if err := b.portal.keyboardKeycode(ctx, int32(code), event.State); err != nil {
+				return err
+			}
+		case KeyboardEventScanCode:
+			if event.ScanCode == 0 {
+				return errors.New("makc: scan code is unknown")
+			}
+			if !event.State.valid() {
+				return errors.New("makc: key state is unknown")
+			}
+			if err := b.portal.keyboardKeycode(ctx, int32(event.ScanCode), event.State); err != nil {
+				return err
+			}
+		case KeyboardEventText:
+			return unsupported("portal RemoteDesktop has no Unicode text path; expand TextEvent to per-rune key sequences before InjectKeyboard")
 		default:
 			return unsupported("unknown keyboard event")
 		}

@@ -42,6 +42,11 @@ const (
 
 	// MouseInjectionUInput uses the Linux uinput kernel interface.
 	MouseInjectionUInput
+
+	// MouseInjectionXDGPortal uses the XDG desktop portal RemoteDesktop
+	// interface for Wayland sessions. Requires the user to approve a
+	// permission dialog the first time Open is called with this backend.
+	MouseInjectionXDGPortal
 )
 
 func (b MouseInjectionBackend) String() string {
@@ -56,6 +61,8 @@ func (b MouseInjectionBackend) String() string {
 		return "cgevent"
 	case MouseInjectionUInput:
 		return "uinput"
+	case MouseInjectionXDGPortal:
+		return "xdgportal"
 	default:
 		return "unknown"
 	}
@@ -84,6 +91,10 @@ const (
 
 	// KeyboardInjectionUInput uses the Linux uinput kernel interface.
 	KeyboardInjectionUInput
+
+	// KeyboardInjectionXDGPortal uses the XDG desktop portal RemoteDesktop
+	// interface for Wayland sessions.
+	KeyboardInjectionXDGPortal
 )
 
 func (b KeyboardInjectionBackend) String() string {
@@ -98,6 +109,8 @@ func (b KeyboardInjectionBackend) String() string {
 		return "cgevent"
 	case KeyboardInjectionUInput:
 		return "uinput"
+	case KeyboardInjectionXDGPortal:
+		return "xdgportal"
 	default:
 		return "unknown"
 	}
