@@ -45,6 +45,7 @@ type darwinBackend struct {
 	api               *darwinAPI
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
+	inputTag          uintptr
 
 	// cgSource is a single CGEventSource shared by every injected event.
 	// CGEventSourceCreate is expensive (allocates IOKit/WindowServer
@@ -113,6 +114,7 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
 		cgSource:          source,
+		inputTag:          cfg.inputTag,
 	}, nil
 }
 
@@ -140,7 +142,7 @@ func (b *darwinBackend) KeyboardInjection() KeyboardInjectionBackend {
 }
 
 func (b *darwinBackend) InputTag() uintptr {
-	return 0
+	return b.inputTag
 }
 
 func (b *darwinBackend) ScreenSize(ctx context.Context) (Point, error) {
@@ -361,8 +363,22 @@ func (b *darwinBackend) postMouseEvent(eventType uint32, location cgPoint, butto
 		b.api.cgEventSetIntegerValueField(event, cgMouseEventDeltaX, deltaX)
 		b.api.cgEventSetIntegerValueField(event, cgMouseEventDeltaY, deltaY)
 	}
+	b.tagEvent(event)
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
+}
+
+// tagEvent stamps the client's input tag onto a CGEvent before posting so
+// the listener can identify own-injected events via kCGEventSourceUserData.
+// macOS has no direct equivalent of Win32 LLMHF_INJECTED on the event
+// itself; injected events are distinguished by source process ID
+// (kCGEventSourceUnixProcessID != 0) and our tag becomes the
+// listener-side ExtraInfo / Own marker.
+func (b *darwinBackend) tagEvent(event uintptr) {
+	if b.inputTag == 0 {
+		return
+	}
+	b.api.cgEventSetIntegerValueField(event, cgEventSourceUserData, int64(b.inputTag))
 }
 
 func (b *darwinBackend) postScroll(vertical, horizontal int32) error {
@@ -374,6 +390,7 @@ func (b *darwinBackend) postScroll(vertical, horizontal int32) error {
 		return errors.New("makc: CGEventCreateScrollWheelEvent failed")
 	}
 	defer b.api.cfRelease(event)
+	b.tagEvent(event)
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
 }
@@ -387,6 +404,7 @@ func (b *darwinBackend) postKeyboard(keyCode uint16, state State) error {
 		return errors.New("makc: CGEventCreateKeyboardEvent failed")
 	}
 	defer b.api.cfRelease(event)
+	b.tagEvent(event)
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
 }
@@ -414,6 +432,7 @@ func (b *darwinBackend) postUnicode(units []uint16, state State) error {
 	}
 	defer b.api.cfRelease(event)
 	b.api.cgEventKeyboardSetUnicodeString(event, uintptr(len(units)), &units[0])
+	b.tagEvent(event)
 	b.api.cgEventPost(cgEventTapHID, event)
 	return nil
 }

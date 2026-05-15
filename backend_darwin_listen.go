@@ -35,11 +35,12 @@ const (
 
 // CGEventGetIntegerValueField indices.
 const (
-	cgKeyboardEventKeycode      = 9
-	cgMouseEventButtonNumber    = 3
+	cgKeyboardEventKeycode       = 9
+	cgMouseEventButtonNumber     = 3
 	cgScrollWheelEventDeltaAxis1 = 11
 	cgScrollWheelEventDeltaAxis2 = 12
-	cgEventSourceUserData       = 42
+	cgEventSourceUnixProcessID   = 41
+	cgEventSourceUserData        = 42
 )
 
 // CFRunLoopRunInMode return codes.
@@ -352,9 +353,15 @@ func darwinEventMask(mask ListenMask) uint64 {
 // are handled in the callback before reaching here).
 func darwinTapToEvent(api *darwinListenAPI, eventType uint32, event uintptr) (InputEvent, bool) {
 	loc := api.cgEventGetLocation(event)
+	// macOS attaches the source process PID to every event. Real HID
+	// input from the kernel reports PID 0; anything posted from
+	// userspace via CGEventPost/CGEventCreate carries the posting
+	// process's PID. Treat non-zero PID as the macOS analogue of
+	// LLMHF_INJECTED on Windows.
 	base := InputEvent{
 		Time:      time.Now(),
 		ExtraInfo: uintptr(api.cgEventGetIntegerValueField(event, cgEventSourceUserData)),
+		Injected:  api.cgEventGetIntegerValueField(event, cgEventSourceUnixProcessID) != 0,
 	}
 	base.Mouse.Position = Point{X: int(loc.X), Y: int(loc.Y)}
 
