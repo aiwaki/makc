@@ -28,7 +28,14 @@ const (
 
 // Tap location, placement, and option constants.
 const (
+	// Tap location. HID-level taps see real hardware events but not the
+	// synthetic events that other userspace processes post via
+	// CGEventPost — including our own injection path. Session-level
+	// taps see both real input AND synthetics that reach the login
+	// session, which is what makc users want when they install a
+	// listener and inject in the same process.
 	cgHIDEventTap              = 0
+	cgSessionEventTap          = 1
 	cgHeadInsertEventTap       = 0
 	cgEventTapOptionListenOnly = 1
 )
@@ -260,7 +267,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 
 	b.ensureTapCallback()
 	tapPort := api.cgEventTapCreate(
-		cgHIDEventTap,
+		cgSessionEventTap,
 		cgHeadInsertEventTap,
 		cgEventTapOptionListenOnly,
 		mask,
