@@ -290,7 +290,14 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	}
 
 	runLoop := api.cfRunLoopGetCurrent()
-	api.cfRunLoopAddSource(runLoop, source, api.commonModesRef)
+	// Attach the source to the concrete default mode rather than to
+	// kCFRunLoopCommonModes. CommonModes is a placeholder that adds the
+	// source to whatever modes have been *registered* as common — and a
+	// freshly-created runloop on a goroutine-pinned OS thread has no
+	// modes registered as common yet, so the source ends up attached to
+	// nothing and the callback never fires. Default mode is always
+	// available on any runloop.
+	api.cfRunLoopAddSource(runLoop, source, api.defaultModeRef)
 	api.cgEventTapEnable(tapPort, true)
 	// CGEventTapCreate succeeds and returns a port even when the process
 	// lacks Input Monitoring permission (Big Sur+); the tap is created
@@ -298,7 +305,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	// false in that state, giving us the only programmatic signal that
 	// the missing permission is the cause of the silent listener.
 	if !api.cgEventTapIsEnabled(tapPort) {
-		api.cfRunLoopRemoveSource(runLoop, source, api.commonModesRef)
+		api.cfRunLoopRemoveSource(runLoop, source, api.defaultModeRef)
 		b.api.cfRelease(source)
 		b.api.cfRelease(tapPort)
 		ready <- errors.New("makc: CGEventTap is disabled — grant your binary Input Monitoring permission in System Settings → Privacy & Security → Input Monitoring")
@@ -308,7 +315,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 
 	cleanup := func() {
 		api.cgEventTapEnable(tapPort, false)
-		api.cfRunLoopRemoveSource(runLoop, source, api.commonModesRef)
+		api.cfRunLoopRemoveSource(runLoop, source, api.defaultModeRef)
 		b.api.cfRelease(source)
 		b.api.cfRelease(tapPort)
 	}
