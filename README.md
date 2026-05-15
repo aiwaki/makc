@@ -1,9 +1,8 @@
 # makc
 
 <p align="center">
-  <strong>Pronounced <code>mak-see</code></strong><br>
-  <sub>Like <code>Maksim</code> without the final <code>m</code>.</sub><br>
-  <sub><strong>M</strong>ouse <strong>A</strong>nd <strong>K</strong>eyboard <strong>C</strong>ontrol for Go.</sub>
+  <strong>Pronounced <code>mak-see</code></strong> —
+  <strong>M</strong>ouse <strong>A</strong>nd <strong>K</strong>eyboard <strong>C</strong>ontrol for Go.
 </p>
 
 <p align="center">
@@ -12,15 +11,15 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/aiwaki/makc"></a>
 </p>
 
-`makc` is a no-cgo mouse and keyboard control package for Windows, macOS, and
-Linux.
+Synthesize mouse and keyboard input on Windows, macOS, and Linux from a single
+Go API. No cgo, no embedded DLL — just `purego`, `x/sys/windows`, and
+`x/sys/unix`.
 
-The current rewrite replaces the old C header, embedded DLL, and `skip_hook`
-submodule with pure Go backends built on:
+Use it for: desktop automation, RPA, accessibility tools, integration tests,
+macro keyboards, custom input devices, anything that needs to drive a UI as if
+a human were at the keyboard.
 
-- [`github.com/ebitengine/purego`](https://github.com/ebitengine/purego)
-- [`golang.org/x/sys/windows`](https://pkg.go.dev/golang.org/x/sys/windows)
-- [`golang.org/x/sys/unix`](https://pkg.go.dev/golang.org/x/sys/unix)
+---
 
 ## Install
 
@@ -28,10 +27,11 @@ submodule with pure Go backends built on:
 go get github.com/aiwaki/makc
 ```
 
-The module path is currently `github.com/aiwaki/makc`; it does not use a `/v2`
-suffix yet.
+Requires Go 1.23+.
 
-## Quick Start
+---
+
+## Hello, click
 
 ```go
 package main
@@ -39,240 +39,263 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/aiwaki/makc"
 )
 
 func main() {
-	ctx := context.Background()
-
 	client, err := makc.Open()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer client.Close()
 
-	profile := makc.BalancedInputProfile(42)
-	sequence := makc.NewInputSequence(
-		makc.MoveStep(makc.Rel(10, 0)),
-		makc.PauseStep(80*time.Millisecond),
-		makc.MoveStep(makc.Rel(-10, 0)),
-		makc.TextStep("makc", profile.Typing),
-	)
-
-	if err := client.Run(ctx, sequence); err != nil {
+	ctx := context.Background()
+	if err := client.Mouse.Click(ctx, makc.ButtonLeft); err != nil {
 		log.Fatal(err)
 	}
 }
 ```
 
-For a safer runnable version that does not click or type unless explicitly
-asked:
+That's it. `makc.Open()` picks the right backend for the current OS, asks for
+permissions if needed, and returns a `*Client`. Every method takes a `context`
+so you can cancel mid-sequence.
 
-```sh
-go run ./examples/sequence
-go run ./examples/sequence -text "hello"
-go run ./examples/sequence -click
+### A few more recipes
+
+```go
+// Move the cursor 100 pixels right and down.
+client.Mouse.MoveBy(ctx, 100, 100)
+
+// Type some text.
+client.Keyboard.TypeText(ctx, "hello, world")
+
+// Press Cmd+Tab (Windows/Linux: Ctrl+Tab).
+client.Keyboard.Combo(ctx, makc.KeyLeftControl, makc.KeyTab)
+
+// Drag from the current spot to (500, 500), curving like a human hand.
+client.Mouse.Drag(ctx, makc.ButtonLeft, makc.Point{X: 500, Y: 500},
+	makc.NaturalMovement(40, 250*time.Millisecond, 42))
 ```
 
-## Features
+### Listening to input
 
-- Mouse state: cursor position, screen size, and button state.
-- Mouse injection: relative/absolute movement, buttons, wheel, horizontal
-  wheel, batches, drags, deterministic paths, and seeded natural paths.
-- Keyboard state: key state, virtual-key events, scan-code events, combos, and
-  Unicode text where the backend supports it.
-- Timing helpers: click holds, double-click cadence, key holds, fixed/variable
-  typing delays, and reusable `Fast`, `Balanced`, and `Careful` input profiles.
-- Mixed sequences: build `move -> pause -> click -> type -> hotkey` workflows
-  with `InputSequence`, then run them through `Client.Run(ctx, sequence)`.
-- Input listeners: Windows low-level hooks, Windows Raw Input, and Linux evdev.
-- Runtime diagnostics: display stack, backend dependency probes, Linux portal
-  hints, and smoke tooling for local or VM validation.
+```go
+listener, err := client.Listen(ctx, makc.ListenOptions{Mask: makc.ListenAll})
+if err != nil { log.Fatal(err) }
+defer listener.Close()
 
-The legacy `pkg/types`, `pkg/types/buttons`, and `pkg/types/keys` packages are
-kept as deprecated compatibility aliases. New code should import the root
-`github.com/aiwaki/makc` package directly.
+for event := range listener.Events {
+	if event.Kind == makc.InputEventMouseButton {
+		log.Printf("button %s state %s", event.Mouse.Button, event.Mouse.State)
+	}
+}
+```
 
-Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+`Listen` is supported on Windows (low-level hooks and Raw Input), Linux
+(evdev), and macOS (CGEventTap). `listener.Stats()` reports delivered/dropped
+counters — bump `ListenOptions.Buffer` if `Dropped` is climbing.
 
-## Backends
+---
 
-`MouseInjectionAuto` and `KeyboardInjectionAuto` select the preferred backend
-for the current platform:
+## Platform setup
 
-| Platform | Mouse | Keyboard | Notes |
-| --- | --- | --- | --- |
-| Windows | `InjectMouseInput` when exported, otherwise `SendInput` | `InjectKeyboardInput` when exported, otherwise `SendInput` | `SendInput` supports per-client `dwExtraInfo` tagging. Tested Windows 11 `Inject*Input` builds reject non-zero extra info, so makc sends zero extra info there. |
-| macOS | CoreGraphics `CGEvent` | CoreGraphics `CGEvent` | Requires Accessibility permission for event injection. |
-| Linux | `/dev/uinput` | `/dev/uinput` | Requires permission to open `/dev/uinput`; listening uses evdev. |
+Most setup is a one-time permission step. Once granted, `makc.Open()` Just
+Works.
 
-Explicit backend selection:
+**Windows.** Nothing to install. The library picks `InjectMouseInput` /
+`InjectKeyboardInput` when the running build of `user32.dll` exports them and
+falls back to `SendInput` otherwise. No admin needed for normal injection;
+some elevated targets reject input from non-elevated callers — same as any
+SendInput-based tool.
+
+**macOS.** Add your binary (or your terminal during dev) to **System Settings
+→ Privacy & Security → Accessibility**. Without it, `Open()` succeeds but
+injection returns an error pointing you at the missing permission. Listening
+also requires this permission.
+
+**Linux (X11).** Either run with access to `/dev/uinput` (uncommon for
+non-root users) or run this once and re-login:
+
+```sh
+sudo bash scripts/linux-uinput-permissions.sh "$USER"
+```
+
+That installs a udev rule giving members of `input` group write access to
+`/dev/uinput`. Listening reads `/dev/input/event*` — same permission story.
+
+**Linux (Wayland).** Use the XDG desktop portal backend:
 
 ```go
 client, err := makc.Open(
-	makc.WithMouseInjection(makc.MouseInjectionInjectMouseInput),
-	makc.WithKeyboardInjection(makc.KeyboardInjectionInjectKeyboardInput),
+    makc.WithMouseXDGPortal(),
+    makc.WithKeyboardXDGPortal(),
 )
 ```
 
-Linux notes:
+The first call shows a one-time GNOME/KDE permission dialog asking the user
+to grant remote-desktop input to your app. Subsequent runs reuse the granted
+session for the lifetime of the `Client`.
 
-- `uinput` supports relative mouse movement, buttons, wheel events, mapped key
-  events, and raw Linux key-code scan events.
-- Linux input state and listening use `/dev/input/event*` devices.
-- Cursor position, screen size, and absolute movement use an optional purego
-  X11/Xlib layer when `DISPLAY` is set.
-- Wayland absolute cursor control and Unicode text injection still need a
-  display-server-specific layer and currently return `ErrUnsupported`.
-- GNOME/XDG Desktop Portal diagnostics are available, but the actual libei
-  backend is still future work.
+---
 
-## API Map
+## Picking a backend
 
-Common operations:
+`makc.Open()` defaults to the right thing per OS. Override only if you need to.
 
-- `makc.Open`, `Client.Close`, `Client.RuntimeInfo`
-- `Client.Mouse.Move`, `MoveTo`, `MoveBy`, `Click`, `DoubleClick`, `Wheel`,
-  `HWheel`, `Drag`, `DragBy`, `Inject`
-- `Client.Keyboard.Tap`, `TapWithHold`, `Combo`, `TypeText`,
-  `TypeTextWithProfile`, `ScanTap`, `Inject`
-- `Client.Listen`
-- `Client.Run`, `Client.RunSteps`
+| Platform | Default | Alternatives |
+| --- | --- | --- |
+| Windows | `MouseInjectionAuto` → `InjectMouseInput` if available, else `SendInput` | `WithMouseSendInput()`, `WithMouseInjectMouseInput()` |
+| macOS | CoreGraphics `CGEvent` | (only one) |
+| Linux | `/dev/uinput` | `WithMouseXDGPortal()` for Wayland |
 
-Profiles and sequences:
+Symmetric Options exist for keyboard.
 
-- Movement: `InstantMovement`, `LinearMovement`, `EaseInOutMovement`,
-  `NaturalMovement`, `NaturalMovementWithJitter`
-- Timing: `FixedInterval`, `VariableInterval`, `ClickProfile`,
-  `TypingProfile`
-- Presets: `InstantInputProfile`, `FastInputProfile`,
-  `BalancedInputProfile`, `CarefulInputProfile`
-- Sequence steps: `MoveStep`, `ClickStep`, `DoubleClickStep`, `KeyTapStep`,
-  `ComboStep`, `TextStep`, `PauseStep`, `MouseStep`, `KeyboardStep`
+A few useful tuning hints:
 
-Parsing helpers for CLIs and config files:
+```go
+// Disable Windows' mouse-move coalescing for high-frequency injection.
+makc.WithMouseMotion(makc.MouseMotionNoCoalesce)
 
-- `ParseKey`
-- `ParseMouseButton`
+// Multi-monitor absolute coordinates against the virtual desktop.
+makc.WithMouseMotion(makc.MouseMotionVirtualDesk)
+
+// Tag injected events so listeners can identify your own input.
+makc.WithInputTag(0xCAFE)
+```
+
+---
+
+## Profiles, sequences, and human-like movement
+
+`Client.Mouse.Click` is the simple path. For deterministic timing or
+"human-like" curves, use a profile:
+
+```go
+// One click with a 50ms hold.
+client.Mouse.ClickWithProfile(ctx, makc.ButtonLeft,
+	makc.ClickWithHold(50*time.Millisecond))
+
+// Type text with a randomized but reproducible cadence.
+client.Keyboard.TypeTextWithProfile(ctx, "hello",
+	makc.VariableTyping(40*time.Millisecond, 120*time.Millisecond, 42))
+
+// Bezier-curved movement instead of teleport.
+client.Mouse.MoveToProfile(ctx, makc.Point{X: 500, Y: 500},
+	makc.NaturalMovement(60, 400*time.Millisecond, 42))
+```
+
+For workflows that mix moves, clicks, pauses, and typing, build an
+`InputSequence`:
+
+```go
+seq := makc.NewInputSequence(
+	makc.MoveStep(makc.Abs(300, 200)),
+	makc.PauseStep(80*time.Millisecond),
+	makc.ClickStep(makc.ButtonLeft, makc.InstantClick),
+	makc.TextStep("makc", makc.InstantTyping),
+)
+client.Run(ctx, seq)
+```
+
+`Fast`, `Balanced`, and `Careful` presets bundle interval timing for the most
+common cases:
+
+```go
+profile := makc.BalancedInputProfile(42) // seed
+client.Keyboard.TypeTextWithProfile(ctx, "hello", profile.Typing)
+```
+
+---
+
+## API map
+
+Common entry points:
+
+- `makc.Open(opts...)` → `*Client`
+- `Client.Mouse.{Move, MoveTo, MoveBy, Click, DoubleClick, Wheel, HWheel, Drag, Position, State, SystemSpeed, Inject}`
+- `Client.Keyboard.{Tap, TapWithHold, Combo, TypeText, ScanTap, State, Inject}`
+- `Client.Listen(ctx, opts)` → `*Listener` with `Events`, `Stats`, `Wait`, `Close`
+- `Client.Run(ctx, sequence)` / `Client.RunSteps(ctx, steps...)`
+- `Client.RuntimeInfo(ctx)` for diagnostics
+
+Movement / timing primitives:
+
+- `InstantMovement`, `LinearMovement`, `EaseInOutMovement`, `NaturalMovement`,
+  `NaturalMovementWithJitter`
+- `FixedInterval`, `VariableInterval`, `ClickProfile`, `TypingProfile`
+- `InstantInputProfile`, `FastInputProfile`, `BalancedInputProfile`,
+  `CarefulInputProfile`
+
+Parsing for CLIs / config:
+
+- `ParseKey("ctrl+shift+a")`, `ParseMouseButton("left")`
+
+Full reference:
+[pkg.go.dev/github.com/aiwaki/makc](https://pkg.go.dev/github.com/aiwaki/makc).
+
+---
 
 ## Examples
 
 ```sh
 go run ./examples/mouse
 go run ./examples/keyboard
-go run ./examples/sequence
+go run ./examples/sequence            # tiny relative move only by default
+go run ./examples/sequence -click     # opt in to clicking
+go run ./examples/sequence -text "hi"
 ```
 
-The sequence example only performs a tiny relative move by default. Pass
-`-click` or `-text "hello"` when you intentionally want those events.
+---
 
-## Checks
+## Diagnostics
 
-Run the default local checks:
+`makc-smoke` is a small CLI that opens a backend and reports what it can do
+without injecting anything unless asked:
 
 ```sh
-bash scripts/check.sh
+go run ./cmd/makc-smoke -runtime-info
+go run ./cmd/makc-smoke -capabilities
+go run ./cmd/makc-smoke -inject -dx 1 -dy 1
 ```
 
-Set `MAKC_CHECK_PARALLELS=1` to include a short Windows Parallels smoke pass.
-
-Build smoke binaries manually:
+Linux portal handshake (no input until you pass `-start`):
 
 ```sh
-GOOS=windows GOARCH=arm64 go build -o dist/makc-smoke-windows-arm64.exe ./cmd/makc-smoke
-GOOS=darwin GOARCH=arm64 go build -o dist/makc-smoke-darwin-arm64 ./cmd/makc-smoke
-GOOS=linux GOARCH=arm64 go build -o dist/makc-smoke-linux-arm64 ./cmd/makc-smoke
+go run ./cmd/makc-portal-handshake
+go run ./cmd/makc-portal-handshake -select-devices -start -timeout 300s
 ```
 
-The smoke command opens the selected backend and reads current state where the
-backend supports it. Useful flags:
+For full local validation, hardware test scripts, and CI smoke runs (Windows
+on Parallels, Linux VMs, etc.) see [`scripts/`](scripts/) and the comments in
+each script.
 
-```sh
-./dist/makc-smoke -runtime-info
-./dist/makc-smoke -capabilities
-./dist/makc-smoke -inject -dx 1 -dy 1
-./dist/makc-smoke -tap shift -tap-hold 30ms
-./dist/makc-smoke -type "hello" -type-profile variable -type-min-delay 40ms -type-max-delay 120ms
-./dist/makc-smoke -click -click-count 2 -click-hold 30ms -click-interval 120ms
-```
+---
 
-## Parallels Smoke
+## A note on detection-evasion
 
-For Windows 11 on Parallels Desktop:
+`makc` deliberately does **not** scrub the operating system's "this event was
+injected" markers (`LLMHF_INJECTED` on Windows,
+`kCGEventSourceUnixProcessID` on macOS) before forwarding to other hooks
+installed in the system. Those flags exist so accessibility software, security
+tools, and yes — anti-cheat — can distinguish synthetic from real input.
+Stripping them out of shared kernel structures to fool other software is out
+of scope.
 
-```sh
-bash scripts/parallels-smoke.sh
-bash scripts/parallels-smoke.sh -backend injectmouseinput -inject -dx 1 -dy 1
-bash scripts/parallels-smoke.sh -backend injectmouseinput -drag -dx 80 -dy 40
-bash scripts/parallels-smoke.sh -backend injectmouseinput -drag -profile natural -seed 42 -dx 80 -dy 40
-bash scripts/parallels-smoke.sh -keyboard-backend injectkeyboardinput -tap shift -scan 0x2A
-bash scripts/parallels-smoke.sh -listen -include-injected -listen-count 3
-bash scripts/parallels-smoke.sh -listen -listen-backend rawinput -listen-count 1
-bash scripts/parallels-smoke.sh -backend sendinput -keyboard-backend sendinput -input-tag 0x1234 -listen -normalize-own-injected -listen-count 3
-```
+What `makc` does provide: `WithInputTag` so *your own* listener can identify
+*your own* injection, plus `Listener.NormalizeOwnInjected` to clear the flags
+on events you produced before your code sees them. That's a callback-private
+operation; the kernel struct stays intact.
 
-The script uses `prlctl exec --current-user` so Windows APIs run in the
-interactive user session. If Parallels reports a successful resume but the VM
-immediately returns to `paused`, disable the VM idle pause option:
+---
 
-```sh
-prlctl set "Windows 11" --pause-idle off
-```
+## Versioning, license, security
 
-`MAKC_PARALLELS_TIMEOUT` controls the `prlctl exec` watchdog in seconds. Set it
-to `0` to disable the watchdog while debugging Parallels itself.
+- Module path is currently `github.com/aiwaki/makc` — no `/v2` yet.
+- Release notes: [CHANGELOG.md](CHANGELOG.md).
+- Security policy: [SECURITY.md](SECURITY.md).
+- Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Linux Diagnostics
-
-On a Linux desktop or VM with Go installed:
-
-```sh
-bash scripts/linux-smoke.sh
-```
-
-The helper loads `uinput` when possible, builds `makc-smoke`, and sends a tiny
-relative mouse move plus a `Shift` tap through the Linux `uinput` backend by
-default. Pass regular `makc-smoke` flags after the script name to customize the
-run.
-
-On macOS with Parallels Desktop and a Linux VM with Parallels Tools installed:
-
-```sh
-bash scripts/parallels-linux-smoke.sh
-```
-
-Inside a Linux guest, discover the active GUI/session-bus environment:
-
-```sh
-bash scripts/linux-session-env.sh
-bash scripts/linux-session-env.sh --exec ./dist/makc-smoke-linux -runtime-info
-```
-
-Read-only XDG Desktop Portal RemoteDesktop diagnostics:
-
-```sh
-bash scripts/linux-session-env.sh --exec bash scripts/linux-portal-info.sh
-bash scripts/linux-session-env.sh --exec bash scripts/linux-gnome-remote-desktop-info.sh
-```
-
-Stateful portal handshake diagnostic:
-
-```sh
-GOOS=linux GOARCH=arm64 go build -o dist/makc-portal-handshake-linux-arm64 ./cmd/makc-portal-handshake
-bash scripts/linux-session-env.sh --exec ./dist/makc-portal-handshake-linux-arm64
-bash scripts/linux-session-env.sh --exec ./dist/makc-portal-handshake-linux-arm64 -select-devices -start -timeout 300s
-```
-
-`cmd/makc-portal-handshake` default mode creates and closes a transient portal
-session. It does not call `Start`, request permissions, or inject input unless
-you pass the corresponding flags. `-start` may show a desktop permission
-prompt.
-
-To allow non-root Linux uinput injection, run this inside the Linux guest and
-then log out and back in:
-
-```sh
-sudo bash scripts/linux-uinput-permissions.sh "$USER"
-```
+The legacy `pkg/types`, `pkg/types/buttons`, `pkg/types/keys` packages are
+deprecated compatibility shims. New code should import the root
+`github.com/aiwaki/makc` package directly.
