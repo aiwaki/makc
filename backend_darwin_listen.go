@@ -43,6 +43,17 @@ const (
 	cgEventSourceUserData        = 42
 )
 
+// CGEventFlags bits for modifier keys. Used by the FlagsChanged handler
+// to derive up/down state from the post-change flag word.
+const (
+	cgFlagMaskAlphaShift = 0x00010000 // Caps Lock
+	cgFlagMaskShift      = 0x00020000
+	cgFlagMaskControl    = 0x00040000
+	cgFlagMaskAlternate  = 0x00080000 // Option
+	cgFlagMaskCommand    = 0x00100000
+	cgFlagMaskSecondaryFn = 0x00800000
+)
+
 // CFRunLoopRunInMode return codes.
 const (
 	cfRunLoopRunFinished      = 1
@@ -422,13 +433,50 @@ func darwinTapToEvent(api *darwinListenAPI, eventType uint32, event uintptr) (In
 		base.Keyboard.State = Up
 		return base, true
 	case cgEventFlagsChanged:
-		// Modifier change. Not represented by a single up/down; emit as
-		// a key event with state derived from the new flags vs prior
-		// would require state tracking. For now skip — listeners that
-		// need modifier tracking can read CGEventGetFlags via raw taps.
-		return InputEvent{}, false
+		// Modifier press/release. The event carries the post-change
+		// flag word and the keycode of the changed key. Derive state
+		// from whether the keycode's mask bit is set in the new flags
+		// — no separate state tracking required.
+		scan := uint16(api.cgEventGetIntegerValueField(event, cgKeyboardEventKeycode))
+		mask := darwinModifierMaskForScanCode(scan)
+		if mask == 0 {
+			return InputEvent{}, false
+		}
+		state := Up
+		if api.cgEventGetFlags(event)&mask != 0 {
+			state = Down
+		}
+		base.Kind = InputEventKey
+		base.Keyboard = KeyboardInputEvent{
+			ScanCode: scan,
+			Key:      darwinKeyFromScanCode(scan),
+			State:    state,
+		}
+		return base, true
 	}
 	return InputEvent{}, false
+}
+
+// darwinModifierMaskForScanCode maps a virtual key code for a modifier key
+// to the CGEventFlags bit it sets when held. Returns 0 for non-modifier
+// keys, signalling the caller to skip.
+func darwinModifierMaskForScanCode(scan uint16) uint64 {
+	switch scan {
+	case 0x37, 0x36: // Left Cmd, Right Cmd
+		return cgFlagMaskCommand
+	case 0x38, 0x3C: // Left Shift, Right Shift
+		return cgFlagMaskShift
+	case 0x3A, 0x3D: // Left Alt/Option, Right Alt/Option
+		return cgFlagMaskAlternate
+	case 0x3B, 0x3E: // Left Control, Right Control
+		return cgFlagMaskControl
+	case 0x39: // Caps Lock
+		return cgFlagMaskAlphaShift
+	case 0x3F: // Fn
+		return cgFlagMaskSecondaryFn
+	default:
+		return 0
+	}
 }
 
 // darwinOtherMouseButton maps CGMouseEventButtonNumber into makc's
