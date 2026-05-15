@@ -80,13 +80,26 @@ type darwinListenAPI struct {
 	cfRunLoopRunInMode            func(uintptr, float64, bool) int32
 	cfRunLoopStop                 func(uintptr)
 
-	// commonModesRef is a CFString built with CFStringCreateWithCString
-	// containing "kCFRunLoopCommonModes". CFRunLoop matches modes by
-	// string equality (CFEqual), so a self-built CFString with the same
-	// content works as an alias for the kCFRunLoopCommonModes global —
-	// and avoids the unsafe.Pointer(uintptr) Dlsym dereference that vet
-	// flags as a possible misuse.
+	// commonModesRef is the CFString "kCFRunLoopCommonModes". Used with
+	// CFRunLoopAddSource/CFRunLoopRemoveSource: a source registered in
+	// the common-modes set is automatically added to every mode that's
+	// currently a member of the set (default mode, modal panel mode,
+	// event tracking mode, etc).
+	//
+	// defaultModeRef is the CFString "kCFRunLoopDefaultMode". Used with
+	// CFRunLoopRunInMode: that call requires a real mode name, NOT the
+	// common-modes marker — passing kCFRunLoopCommonModes triggers the
+	// "invalid mode 'kCFRunLoopCommonModes' provided to
+	// CFRunLoopRunSpecific" warning at startup. The source is added via
+	// commonModesRef so events still flow into the default-mode loop.
+	//
+	// Both CFStrings are built locally via CFStringCreateWithCString.
+	// CFRunLoop matches modes by CFEqual, so a self-built CFString with
+	// the documented content acts as an alias for the global — without
+	// dereferencing the const symbols (purego/Dlsym on data symbols is
+	// fragile and vet-noisy).
 	commonModesRef uintptr
+	defaultModeRef uintptr
 }
 
 // kCFStringEncodingASCII = 0x0600. ASCII is sufficient for the mode name.
@@ -134,13 +147,19 @@ func (b *darwinBackend) ensureListenAPI() error {
 			purego.RegisterFunc(bind.fptr, proc)
 		}
 
-		// Build the CFString for kCFRunLoopCommonModes ourselves rather
-		// than dereferencing the global symbol — see commonModesRef
-		// docs for rationale.
-		modeName := []byte("kCFRunLoopCommonModes\x00")
-		la.commonModesRef = la.cfStringCreateWithCString(0, &modeName[0], kCFStringEncodingASCII)
+		// Build CFStrings for the run-loop modes we use. See doc on
+		// commonModesRef / defaultModeRef for why these are built
+		// locally instead of dereferencing the global symbols.
+		commonName := []byte("kCFRunLoopCommonModes\x00")
+		la.commonModesRef = la.cfStringCreateWithCString(0, &commonName[0], kCFStringEncodingASCII)
 		if la.commonModesRef == 0 {
 			b.listenAPIErr = errors.New("makc: CFStringCreateWithCString(kCFRunLoopCommonModes) failed")
+			return
+		}
+		defaultName := []byte("kCFRunLoopDefaultMode\x00")
+		la.defaultModeRef = la.cfStringCreateWithCString(0, &defaultName[0], kCFStringEncodingASCII)
+		if la.defaultModeRef == 0 {
+			b.listenAPIErr = errors.New("makc: CFStringCreateWithCString(kCFRunLoopDefaultMode) failed")
 			return
 		}
 
@@ -285,7 +304,7 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	// indefinitely otherwise.
 	const slice = 0.25 // seconds
 	for {
-		result := api.cfRunLoopRunInMode(api.commonModesRef, slice, false)
+		result := api.cfRunLoopRunInMode(api.defaultModeRef, slice, false)
 		if result == cfRunLoopRunStopped || result == cfRunLoopRunFinished {
 			break
 		}
