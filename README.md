@@ -1,6 +1,10 @@
 # makc
 
 <p align="center">
+  <img src=".github/assets/mascot.png" alt="makc mascot — a Go gopher with robot arms" width="200">
+</p>
+
+<p align="center">
   <strong>Pronounced <code>mak-see</code></strong> —
   <strong>M</strong>ouse <strong>A</strong>nd <strong>K</strong>eyboard <strong>C</strong>ontrol for Go.
 </p>
