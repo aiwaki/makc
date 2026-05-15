@@ -68,6 +68,7 @@ const (
 type darwinListenAPI struct {
 	cgEventTapCreate              func(uint32, uint32, uint32, uint64, uintptr, unsafe.Pointer) uintptr
 	cgEventTapEnable              func(uintptr, bool)
+	cgEventTapIsEnabled           func(uintptr) bool
 	cgEventGetType                func(uintptr) uint32
 	cgEventGetFlags               func(uintptr) uint64
 	cgEventGetLocation            func(uintptr) cgPoint
@@ -126,6 +127,7 @@ func (b *darwinBackend) ensureListenAPI() error {
 		}{
 			{appServices, &la.cgEventTapCreate, "CGEventTapCreate"},
 			{appServices, &la.cgEventTapEnable, "CGEventTapEnable"},
+			{appServices, &la.cgEventTapIsEnabled, "CGEventTapIsEnabled"},
 			{appServices, &la.cgEventGetType, "CGEventGetType"},
 			{appServices, &la.cgEventGetFlags, "CGEventGetFlags"},
 			{appServices, &la.cgEventGetLocation, "CGEventGetLocation"},
@@ -283,6 +285,19 @@ func (b *darwinBackend) runEventTapListener(ctx context.Context, opts ListenOpti
 	runLoop := api.cfRunLoopGetCurrent()
 	api.cfRunLoopAddSource(runLoop, source, api.commonModesRef)
 	api.cgEventTapEnable(tapPort, true)
+	// CGEventTapCreate succeeds and returns a port even when the process
+	// lacks Input Monitoring permission (Big Sur+); the tap is created
+	// but events never reach the callback. CGEventTapIsEnabled returns
+	// false in that state, giving us the only programmatic signal that
+	// the missing permission is the cause of the silent listener.
+	if !api.cgEventTapIsEnabled(tapPort) {
+		api.cfRunLoopRemoveSource(runLoop, source, api.commonModesRef)
+		b.api.cfRelease(source)
+		b.api.cfRelease(tapPort)
+		ready <- errors.New("makc: CGEventTap is disabled — grant your binary Input Monitoring permission in System Settings → Privacy & Security → Input Monitoring")
+		done <- nil
+		return
+	}
 
 	cleanup := func() {
 		api.cgEventTapEnable(tapPort, false)
