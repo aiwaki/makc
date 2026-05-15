@@ -11,6 +11,7 @@ type systemBackend interface {
 	ScreenSize(context.Context) (Point, error)
 	CursorPos(context.Context) (Point, error)
 	MouseButtonState(context.Context, MouseButton) (State, error)
+	MouseSystemSpeed(context.Context) (int, error)
 	InjectMouse(context.Context, []MouseEvent) error
 	MoveMouse(context.Context, MouseMove) error
 	SetMouseButton(context.Context, MouseButton, State) error

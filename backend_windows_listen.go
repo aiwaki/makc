@@ -4,6 +4,7 @@ package makc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -89,7 +90,47 @@ func (b *winBackend) ListenInput(ctx context.Context, opts ListenOptions) (*List
 	}
 }
 
-type inputListenerRunner func(context.Context, ListenOptions, chan<- InputEvent, chan<- error, chan<- error)
+// ensureHookCallbacks lazily registers the singleton thunks for the LL mouse
+// hook, the LL keyboard hook, and the raw-input window procedure. Call from
+// any goroutine; the sync.Once guarantees a single registration even under
+// race. windows.NewCallback slots are never freed, so registering them once
+// per backend is the only way to use Listen repeatedly without exhausting
+// the global thunk table.
+func (b *winBackend) ensureHookCallbacks() {
+	b.hookCallbacksOnce.Do(func() {
+		b.mouseHookCallback = windows.NewCallback(func(nCode int, wParam uintptr, lParam *msllHookStruct) uintptr {
+			if nCode >= 0 && lParam != nil {
+				// Cursor cache update runs unconditionally so CursorPos
+				// can serve from cache while a listener is active. Pt
+				// is documented to be valid for every WH_MOUSE_LL
+				// callback regardless of message type.
+				p := Point{X: int(lParam.Pt.X), Y: int(lParam.Pt.Y)}
+				b.cachedCursor.Store(&p)
+				if e := b.activeMouseEmitter.Load(); e != nil {
+					if event, ok := mouseHookEvent(uint32(wParam), lParam); ok {
+						e.emit(event)
+					}
+				}
+			}
+			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
+		})
+		b.kbdHookCallback = windows.NewCallback(func(nCode int, wParam uintptr, lParam *kbdllHookStruct) uintptr {
+			if nCode >= 0 {
+				if e := b.activeKbdEmitter.Load(); e != nil && lParam != nil {
+					if event, ok := keyboardHookEvent(uint32(wParam), lParam); ok {
+						e.emit(event)
+					}
+				}
+			}
+			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
+		})
+		b.wndProcCallback = windows.NewCallback(func(hwnd uintptr, message uint32, wParam uintptr, lParam uintptr) uintptr {
+			return b.api.defWindowProc(hwnd, message, wParam, lParam)
+		})
+	})
+}
+
+type inputListenerRunner func(context.Context, ListenOptions, *listenerStats, chan<- InputEvent, chan<- error, chan<- error)
 
 func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, runner inputListenerRunner) (*Listener, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -97,8 +138,9 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 	events := make(chan InputEvent, opts.Buffer)
 	done := make(chan error, 1)
 	ready := make(chan error, 1)
+	stats := newListenerStats()
 
-	go runner(ctx, opts, events, ready, done)
+	go runner(ctx, opts, stats, events, ready, done)
 
 	select {
 	case err := <-ready:
@@ -106,76 +148,89 @@ func (b *winBackend) listenWithRunner(ctx context.Context, opts ListenOptions, r
 			cancel()
 			return nil, err
 		}
-		return &Listener{
-			Events: events,
-			done:   done,
-			cancel: cancel,
-		}, nil
+		return newListener(events, done, cancel, stats), nil
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()
 	}
 }
 
-func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOptions, stats *listenerStats, events chan<- InputEvent, ready chan<- error, done chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(events)
 
+	b.ensureHookCallbacks()
 	threadID := windows.GetCurrentThreadId()
-	callbacks := make([]uintptr, 0, 2)
-	hooks := make([]uintptr, 0, 2)
-	var stopped bool
-	var err error
 
-	emit := func(event InputEvent) {
-		markOwnInputEvent(&event, b.inputTag)
-		if !prepareInputEvent(&event, opts) {
-			return
+	emitter := &hookEmitter{
+		emit: func(event InputEvent) {
+			markOwnInputEvent(&event, b.inputTag)
+			if !prepareInputEvent(&event, opts) {
+				return
+			}
+			select {
+			case events <- event:
+				stats.delivered.Add(1)
+			default:
+				stats.dropped.Add(1)
+			}
+		},
+	}
+
+	type installed struct {
+		hook    uintptr
+		release func()
+	}
+	var hooks []installed
+	cleanup := func() {
+		// Detach emitters before unhooking so a tail-end callback in
+		// flight finds an empty slot and short-circuits to CallNextHookEx.
+		for _, h := range hooks {
+			h.release()
 		}
-		select {
-		case events <- event:
-		default:
+		for i := len(hooks) - 1; i >= 0; i-- {
+			if hooks[i].hook != 0 {
+				b.api.unhookWindowsHookEx(hooks[i].hook)
+			}
 		}
 	}
 
 	if opts.Mask&ListenMouse != 0 {
-		cb := windows.NewCallback(func(nCode int, wParam uintptr, lParam *msllHookStruct) uintptr {
-			if nCode >= 0 {
-				if event, ok := mouseHookEvent(uint32(wParam), lParam); ok {
-					emit(event)
-				}
-			}
-			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
-		})
-		callbacks = append(callbacks, cb)
-		hook := b.api.setWindowsHookEx(whMouseLL, cb, 0, 0)
-		if hook == 0 {
-			ready <- fmt.Errorf("makc: SetWindowsHookExW(WH_MOUSE_LL) failed: %w", lastWindowsError())
+		if !b.activeMouseEmitter.CompareAndSwap(nil, emitter) {
+			ready <- errors.New("makc: another mouse hook listener is already active on this client")
 			done <- nil
 			return
 		}
-		hooks = append(hooks, hook)
+		hook, err := b.api.setWindowsHookEx(whMouseLL, b.mouseHookCallback, 0, 0)
+		if err != nil {
+			b.activeMouseEmitter.Store(nil)
+			ready <- err
+			done <- nil
+			return
+		}
+		hooks = append(hooks, installed{hook: hook, release: func() {
+			b.activeMouseEmitter.Store(nil)
+			b.cachedCursor.Store(nil)
+		}})
 	}
 
 	if opts.Mask&ListenKeyboard != 0 {
-		cb := windows.NewCallback(func(nCode int, wParam uintptr, lParam *kbdllHookStruct) uintptr {
-			if nCode >= 0 {
-				if event, ok := keyboardHookEvent(uint32(wParam), lParam); ok {
-					emit(event)
-				}
-			}
-			return b.api.callNextHookEx(0, int32(nCode), wParam, uintptr(unsafe.Pointer(lParam)))
-		})
-		callbacks = append(callbacks, cb)
-		hook := b.api.setWindowsHookEx(whKeyboardLL, cb, 0, 0)
-		if hook == 0 {
-			unhookAll(b.api, hooks)
-			ready <- fmt.Errorf("makc: SetWindowsHookExW(WH_KEYBOARD_LL) failed: %w", lastWindowsError())
+		if !b.activeKbdEmitter.CompareAndSwap(nil, emitter) {
+			cleanup()
+			ready <- errors.New("makc: another keyboard hook listener is already active on this client")
 			done <- nil
 			return
 		}
-		hooks = append(hooks, hook)
+		hook, err := b.api.setWindowsHookEx(whKeyboardLL, b.kbdHookCallback, 0, 0)
+		if err != nil {
+			b.activeKbdEmitter.Store(nil)
+			cleanup()
+			ready <- err
+			done <- nil
+			return
+		}
+		hooks = append(hooks, installed{hook: hook, release: func() { b.activeKbdEmitter.Store(nil) }})
 	}
 
 	if len(hooks) == 0 {
@@ -191,11 +246,13 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 
 	ready <- nil
 
+	var stopped bool
+	var err error
 	var msg winMsg
 	for {
-		result := b.api.getMessage(&msg, 0, 0, 0)
-		if result == -1 {
-			err = fmt.Errorf("makc: GetMessageW failed: %w", lastWindowsError())
+		result, getErr := b.api.getMessage(&msg, 0, 0, 0)
+		if getErr != nil {
+			err = getErr
 			break
 		}
 		if result == 0 {
@@ -204,8 +261,7 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 		}
 	}
 
-	unhookAll(b.api, hooks)
-	runtime.KeepAlive(callbacks)
+	cleanup()
 
 	if stopped {
 		done <- nil
@@ -214,18 +270,19 @@ func (b *winBackend) runHookInputListener(ctx context.Context, opts ListenOption
 	done <- err
 }
 
-func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions, events chan<- InputEvent, ready chan<- error, done chan<- error) {
+func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions, stats *listenerStats, events chan<- InputEvent, ready chan<- error, done chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(events)
 
-	threadID := windows.GetCurrentThreadId()
-	className, err := windows.UTF16PtrFromString(fmt.Sprintf("makcRawInput%d", threadID))
-	if err != nil {
+	b.ensureHookCallbacks()
+	if err := b.ensureRawInputClass(); err != nil {
 		ready <- err
 		done <- nil
 		return
 	}
+
+	threadID := windows.GetCurrentThreadId()
 	windowName, err := windows.UTF16PtrFromString("makc raw input")
 	if err != nil {
 		ready <- err
@@ -233,25 +290,9 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		return
 	}
 
-	wndProc := windows.NewCallback(func(hwnd uintptr, message uint32, wParam uintptr, lParam uintptr) uintptr {
-		return b.api.defWindowProc(hwnd, message, wParam, lParam)
-	})
-
-	wc := wndClassEx{
-		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-		LpfnWndProc:   wndProc,
-		LpszClassName: className,
-	}
-	if atom := b.api.registerClassEx(&wc); atom == 0 {
-		ready <- fmt.Errorf("makc: RegisterClassExW(raw input) failed: %w", lastWindowsError())
-		done <- nil
-		return
-	}
-	defer b.api.unregisterClass(className, 0)
-
-	hwnd := b.api.createWindowEx(0, className, windowName, 0, 0, 0, 0, 0, hwndMessage(), 0, 0, 0)
-	if hwnd == 0 {
-		ready <- fmt.Errorf("makc: CreateWindowExW(raw input) failed: %w", lastWindowsError())
+	hwnd, err := b.api.createWindowEx(0, b.rawClassName, windowName, 0, 0, 0, 0, 0, hwndMessage(), 0, 0, 0)
+	if err != nil {
+		ready <- err
 		done <- nil
 		return
 	}
@@ -263,8 +304,8 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		done <- nil
 		return
 	}
-	if ok := b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{}))); ok == 0 {
-		ready <- fmt.Errorf("makc: RegisterRawInputDevices failed: %w", lastWindowsError())
+	if err := b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{}))); err != nil {
+		ready <- err
 		done <- nil
 		return
 	}
@@ -277,7 +318,9 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		}
 		select {
 		case events <- event:
+			stats.delivered.Add(1)
 		default:
+			stats.dropped.Add(1)
 		}
 	}
 
@@ -292,9 +335,9 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 	var loopErr error
 	var msg winMsg
 	for {
-		result := b.api.getMessage(&msg, 0, 0, 0)
-		if result == -1 {
-			loopErr = fmt.Errorf("makc: GetMessageW failed: %w", lastWindowsError())
+		result, getErr := b.api.getMessage(&msg, 0, 0, 0)
+		if getErr != nil {
+			loopErr = getErr
 			break
 		}
 		if result == 0 {
@@ -305,9 +348,13 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 			continue
 		}
 		inputEvents, err := b.rawInputEvents(msg.LParam)
-		if msg.WParam == rimInput {
-			b.api.defWindowProc(msg.Hwnd, msg.Message, msg.WParam, msg.LParam)
-		}
+		// Per MSDN WM_INPUT remarks, the application must always call
+		// DefWindowProc for cleanup of the raw input data, regardless of
+		// whether wParam is RIM_INPUT (foreground) or RIM_INPUTSINK
+		// (background). Skipping it for RIM_INPUTSINK leaks kernel
+		// buffers — and ridevInputSink is exactly the flag we register
+		// with, so most events arrive as RIM_INPUTSINK.
+		b.api.defWindowProc(msg.Hwnd, msg.Message, msg.WParam, msg.LParam)
 		if err != nil {
 			loopErr = err
 			break
@@ -317,9 +364,7 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 		}
 	}
 
-	runtime.KeepAlive(className)
 	runtime.KeepAlive(windowName)
-	runtime.KeepAlive(wndProc)
 
 	if stopped {
 		done <- nil
@@ -328,12 +373,31 @@ func (b *winBackend) runRawInputListener(ctx context.Context, opts ListenOptions
 	done <- loopErr
 }
 
-func unhookAll(api *winAPI, hooks []uintptr) {
-	for i := len(hooks) - 1; i >= 0; i-- {
-		if hooks[i] != 0 {
-			api.unhookWindowsHookEx(hooks[i])
+// ensureRawInputClass registers the message-only window class used by raw
+// input listeners. Class name is stable per process+backend so repeated
+// Listen calls reuse the same atom; the class is unregistered in
+// winBackend.Close. Bound wndProc is the singleton b.wndProcCallback.
+func (b *winBackend) ensureRawInputClass() error {
+	b.rawClassOnce.Do(func() {
+		name, err := windows.UTF16PtrFromString(fmt.Sprintf("makcRawInput%d", windows.GetCurrentProcessId()))
+		if err != nil {
+			b.rawClassErr = err
+			return
 		}
-	}
+		wc := wndClassEx{
+			CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
+			LpfnWndProc:   b.wndProcCallback,
+			LpszClassName: name,
+		}
+		atom, err := b.api.registerClassEx(&wc)
+		if err != nil {
+			b.rawClassErr = err
+			return
+		}
+		b.rawClassName = name
+		b.rawClassAtom = atom
+	})
+	return b.rawClassErr
 }
 
 func rawInputDevices(mask ListenMask, hwnd uintptr, flags uint32) []rawInputDevice {
@@ -362,23 +426,22 @@ func (b *winBackend) unregisterRawInputDevices(mask ListenMask) {
 	if len(devices) == 0 {
 		return
 	}
-	b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{})))
+	_ = b.api.registerRawInputDevices(&devices[0], uint32(len(devices)), uint32(unsafe.Sizeof(rawInputDevice{})))
 }
 
 func (b *winBackend) rawInputEvents(handle uintptr) ([]InputEvent, error) {
 	var size uint32
 	headerSize := uint32(unsafe.Sizeof(rawInputHeader{}))
-	if got := b.api.getRawInputData(handle, ridInput, nil, &size, headerSize); got == ^uint32(0) {
-		return nil, fmt.Errorf("makc: GetRawInputData(size) failed: %w", lastWindowsError())
+	if _, err := b.api.getRawInputData(handle, ridInput, nil, &size, headerSize); err != nil {
+		return nil, fmt.Errorf("makc: GetRawInputData(size) failed: %w", err)
 	}
 	if size == 0 {
 		return nil, nil
 	}
 
 	buf := make([]byte, size)
-	got := b.api.getRawInputData(handle, ridInput, unsafe.Pointer(&buf[0]), &size, headerSize)
-	if got == ^uint32(0) {
-		return nil, fmt.Errorf("makc: GetRawInputData(input) failed: %w", lastWindowsError())
+	if _, err := b.api.getRawInputData(handle, ridInput, unsafe.Pointer(&buf[0]), &size, headerSize); err != nil {
+		return nil, fmt.Errorf("makc: GetRawInputData(input) failed: %w", err)
 	}
 	return parseRawInputEvents(buf), nil
 }

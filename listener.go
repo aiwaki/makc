@@ -2,6 +2,8 @@ package makc
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -156,6 +158,60 @@ type Listener struct {
 
 	done   <-chan error
 	cancel context.CancelFunc
+	stats  *listenerStats
+
+	// Wait coordination. waitOnce runs the single drain of done into
+	// waitErr; waitDone broadcasts completion to repeat callers so
+	// Listener.Wait can be called more than once without hanging on the
+	// already-drained one-shot done channel.
+	waitOnce sync.Once
+	waitErr  error
+	waitDone chan struct{}
+}
+
+func newListener(events <-chan InputEvent, done <-chan error, cancel context.CancelFunc, stats *listenerStats) *Listener {
+	return &Listener{
+		Events:   events,
+		done:     done,
+		cancel:   cancel,
+		stats:    stats,
+		waitDone: make(chan struct{}),
+	}
+}
+
+// ListenerStats reports counters maintained by an active or finished listener.
+type ListenerStats struct {
+	// Delivered is the number of events successfully sent on Events since
+	// the listener started.
+	Delivered uint64
+
+	// Dropped is the number of events the listener observed but dropped
+	// because the Events channel buffer was full. Tune ListenOptions.Buffer
+	// or drain Events faster if Dropped grows.
+	Dropped uint64
+}
+
+// listenerStats is the internal counter pair shared between the goroutine
+// producing events and Listener.Stats.
+type listenerStats struct {
+	delivered atomic.Uint64
+	dropped   atomic.Uint64
+}
+
+func newListenerStats() *listenerStats {
+	return &listenerStats{}
+}
+
+// Stats returns a snapshot of the listener's delivery counters. It is safe
+// to call from any goroutine, including after the listener stops.
+func (l *Listener) Stats() ListenerStats {
+	if l == nil || l.stats == nil {
+		return ListenerStats{}
+	}
+	return ListenerStats{
+		Delivered: l.stats.delivered.Load(),
+		Dropped:   l.stats.dropped.Load(),
+	}
 }
 
 // Close requests listener shutdown.
@@ -166,12 +222,26 @@ func (l *Listener) Close() {
 	l.cancel()
 }
 
-// Wait blocks until the listener stops.
+// Wait blocks until the listener stops and returns the listener's exit
+// error. Safe to call from multiple goroutines and to call repeatedly:
+// the first call drains the underlying done channel, subsequent calls
+// observe the broadcast and return the same cached error.
 func (l *Listener) Wait() error {
-	if l == nil || l.done == nil {
+	if l == nil {
 		return nil
 	}
-	return <-l.done
+	l.waitOnce.Do(func() {
+		if l.done != nil {
+			l.waitErr = <-l.done
+		}
+		if l.waitDone != nil {
+			close(l.waitDone)
+		}
+	})
+	if l.waitDone != nil {
+		<-l.waitDone
+	}
+	return l.waitErr
 }
 
 // Listen starts an input listener.

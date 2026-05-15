@@ -6,10 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"unicode/utf16"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,21 +23,29 @@ const (
 	keyeventfUnicode     = 0x0004
 	keyeventfScanCode    = 0x0008
 
-	mouseeventfMove       = 0x0001
-	mouseeventfLeftDown   = 0x0002
-	mouseeventfLeftUp     = 0x0004
-	mouseeventfRightDown  = 0x0008
-	mouseeventfRightUp    = 0x0010
-	mouseeventfMiddleDown = 0x0020
-	mouseeventfMiddleUp   = 0x0040
-	mouseeventfXDown      = 0x0080
-	mouseeventfXUp        = 0x0100
-	mouseeventfWheel      = 0x0800
-	mouseeventfHWheel     = 0x01000
-	mouseeventfAbsolute   = 0x8000
+	mouseeventfMove           = 0x0001
+	mouseeventfLeftDown       = 0x0002
+	mouseeventfLeftUp         = 0x0004
+	mouseeventfRightDown      = 0x0008
+	mouseeventfRightUp        = 0x0010
+	mouseeventfMiddleDown     = 0x0020
+	mouseeventfMiddleUp       = 0x0040
+	mouseeventfXDown          = 0x0080
+	mouseeventfXUp            = 0x0100
+	mouseeventfWheel          = 0x0800
+	mouseeventfHWheel         = 0x01000
+	mouseeventfMoveNoCoalesce = 0x2000
+	mouseeventfVirtualDesk    = 0x4000
+	mouseeventfAbsolute       = 0x8000
 
-	smCXScreen = 0
-	smCYScreen = 1
+	smCXScreen        = 0
+	smCYScreen        = 1
+	smXVirtualScreen  = 76
+	smYVirtualScreen  = 77
+	smCXVirtualScreen = 78
+	smCYVirtualScreen = 79
+
+	spiGetMouseSpeed = 0x0070
 
 	vkLeftButton   = 0x01
 	vkRightButton  = 0x02
@@ -53,6 +62,48 @@ type winBackend struct {
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 	inputTag          uintptr
+	mouseMotionFlags  MouseMotionFlag
+
+	// Singleton callbacks for low-level hooks and the raw-input window
+	// procedure. windows.NewCallback allocates a thunk slot from a small
+	// global table (~2000 entries) that is never released. Allocating new
+	// slots per Listen call guarantees an eventual exhaustion panic on a
+	// long-running process. We register each callback at most once for
+	// the lifetime of the backend and route the actual event delivery
+	// through atomic-loaded emitter pointers, which Listen swaps in and
+	// out on start/stop.
+	hookCallbacksOnce sync.Once
+	mouseHookCallback uintptr
+	kbdHookCallback   uintptr
+	wndProcCallback   uintptr
+
+	activeMouseEmitter atomic.Pointer[hookEmitter]
+	activeKbdEmitter   atomic.Pointer[hookEmitter]
+	activeRawEmitter   atomic.Pointer[hookEmitter]
+
+	// cachedCursor is the most recent cursor position observed by an
+	// active mouse hook listener. Populated by the LL mouse hook on
+	// every event (Pt is always present per WM_MOUSE_LL docs); read by
+	// CursorPos as a fast path that skips the GetCursorPos syscall when
+	// a listener is keeping the cache fresh. Cleared on listener stop
+	// to prevent stale reads.
+	cachedCursor atomic.Pointer[Point]
+
+	// Raw-input window class is registered lazily once per backend and
+	// torn down in Close. Each Listen call creates its own ephemeral
+	// window of this class.
+	rawClassOnce sync.Once
+	rawClassErr  error
+	rawClassName *uint16
+	rawClassAtom uint16
+}
+
+// hookEmitter is the per-Listen receiver wired into the singleton hook
+// callbacks. Listen installs an emitter in the matching atomic.Pointer slot
+// before installing its OS hook and clears the slot on shutdown. The hot path
+// in the callback does one atomic load, one nil-check, and dispatches.
+type hookEmitter struct {
+	emit func(InputEvent)
 }
 
 func newSystemBackend(cfg config) (systemBackend, error) {
@@ -64,13 +115,13 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	mouseInjection := cfg.mouseInjection
 	switch mouseInjection {
 	case MouseInjectionAuto:
-		if api.injectMouseInput != nil {
+		if api.hasInjectMouseInput {
 			mouseInjection = MouseInjectionInjectMouseInput
 		} else {
 			mouseInjection = MouseInjectionSendInput
 		}
 	case MouseInjectionInjectMouseInput:
-		if api.injectMouseInput == nil {
+		if !api.hasInjectMouseInput {
 			return nil, unsupported("user32!InjectMouseInput is not available")
 		}
 	case MouseInjectionSendInput:
@@ -85,13 +136,13 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 	keyboardInjection := cfg.keyboardInjection
 	switch keyboardInjection {
 	case KeyboardInjectionAuto:
-		if api.injectKeyboardInput != nil {
+		if api.hasInjectKeyboardInput {
 			keyboardInjection = KeyboardInjectionInjectKeyboardInput
 		} else {
 			keyboardInjection = KeyboardInjectionSendInput
 		}
 	case KeyboardInjectionInjectKeyboardInput:
-		if api.injectKeyboardInput == nil {
+		if !api.hasInjectKeyboardInput {
 			return nil, unsupported("user32!InjectKeyboardInput is not available")
 		}
 	case KeyboardInjectionSendInput:
@@ -108,10 +159,19 @@ func newSystemBackend(cfg config) (systemBackend, error) {
 		mouseInjection:    mouseInjection,
 		keyboardInjection: keyboardInjection,
 		inputTag:          cfg.inputTag,
+		mouseMotionFlags:  cfg.mouseMotionFlags,
 	}, nil
 }
 
 func (b *winBackend) Close() error {
+	if b == nil {
+		return nil
+	}
+	if b.rawClassName != nil && b.rawClassAtom != 0 {
+		b.api.unregisterClass(b.rawClassName, 0)
+		b.rawClassName = nil
+		b.rawClassAtom = 0
+	}
 	return nil
 }
 
@@ -142,11 +202,28 @@ func (b *winBackend) CursorPos(ctx context.Context) (Point, error) {
 		return Point{}, err
 	}
 
+	if b.activeMouseEmitter.Load() != nil {
+		if cached := b.cachedCursor.Load(); cached != nil {
+			return *cached, nil
+		}
+	}
+
 	var p winPoint
-	if ok := b.api.getCursorPos(&p); ok == 0 {
-		return Point{}, fmt.Errorf("makc: GetCursorPos failed: %w", lastWindowsError())
+	if err := b.api.getCursorPos(&p); err != nil {
+		return Point{}, err
 	}
 	return Point{X: int(p.X), Y: int(p.Y)}, nil
+}
+
+func (b *winBackend) MouseSystemSpeed(ctx context.Context) (int, error) {
+	if err := checkContext(ctx); err != nil {
+		return 0, err
+	}
+	var speed uint32
+	if err := b.api.systemParametersInfo(spiGetMouseSpeed, 0, unsafe.Pointer(&speed), 0); err != nil {
+		return 0, err
+	}
+	return int(speed), nil
 }
 
 func (b *winBackend) MouseButtonState(ctx context.Context, button MouseButton) (State, error) {
@@ -316,10 +393,7 @@ func (b *winBackend) injectKeyboardEvents(events []KeyboardEvent) error {
 	if len(inputs) == 0 {
 		return nil
 	}
-	if ok := b.api.injectKeyboardInput(&inputs[0], int32(len(inputs))); ok == 0 {
-		return fmt.Errorf("makc: InjectKeyboardInput failed: %w", lastWindowsError())
-	}
-	return nil
+	return b.api.injectKeyboardInput(&inputs[0], int32(len(inputs)))
 }
 
 func (b *winBackend) sendInputKeyboardEvents(events []KeyboardEvent) error {
@@ -352,10 +426,7 @@ func (b *winBackend) injectMouseEvents(events []MouseEvent) error {
 	if len(inputs) == 0 {
 		return nil
 	}
-	if ok := b.api.injectMouseInput(&inputs[0], int32(len(inputs))); ok == 0 {
-		return fmt.Errorf("makc: InjectMouseInput failed: %w", lastWindowsError())
-	}
-	return nil
+	return b.api.injectMouseInput(&inputs[0], int32(len(inputs)))
 }
 
 func (b *winBackend) sendInputMouseEvents(events []MouseEvent) error {
@@ -384,11 +455,8 @@ func (b *winBackend) sendInputs(inputs []input) error {
 	if len(inputs) == 0 {
 		return nil
 	}
-	sent := b.api.sendInput(uint32(len(inputs)), unsafe.Pointer(&inputs[0]), int32(unsafe.Sizeof(input{})))
-	if sent != uint32(len(inputs)) {
-		return fmt.Errorf("makc: SendInput sent %d of %d inputs: %w", sent, len(inputs), lastWindowsError())
-	}
-	return nil
+	_, err := b.api.sendInput(uint32(len(inputs)), unsafe.Pointer(&inputs[0]), int32(unsafe.Sizeof(input{})))
+	return err
 }
 
 func (b *winBackend) mouseEventInput(event MouseEvent, extraInfo uintptr) (injectedMouseInput, error) {
@@ -427,10 +495,29 @@ func (b *winBackend) mouseMoveInput(move MouseMove, extraInfo uintptr) injectedM
 	dy := int32(move.Y)
 	flags := uint32(mouseeventfMove)
 
+	if b.mouseMotionFlags&MouseMotionNoCoalesce != 0 {
+		flags |= mouseeventfMoveNoCoalesce
+	}
+
 	if !move.Relative {
 		flags |= mouseeventfAbsolute
-		dx = absoluteMouseCoordinate(dx, b.api.getSystemMetrics(smCXScreen))
-		dy = absoluteMouseCoordinate(dy, b.api.getSystemMetrics(smCYScreen))
+		// Per MSDN, MOUSEEVENTF_VIRTUALDESK requires MOUSEEVENTF_ABSOLUTE
+		// and reinterprets the coordinate space as the union of all
+		// monitors (origin = SM_XVIRTUALSCREEN, size =
+		// SM_CXVIRTUALSCREEN). For relative moves, VIRTUALDESK is a no-op
+		// because relative deltas don't carry coordinate-space semantics.
+		if b.mouseMotionFlags&MouseMotionVirtualDesk != 0 {
+			flags |= mouseeventfVirtualDesk
+			originX := b.api.getSystemMetrics(smXVirtualScreen)
+			originY := b.api.getSystemMetrics(smYVirtualScreen)
+			width := b.api.getSystemMetrics(smCXVirtualScreen)
+			height := b.api.getSystemMetrics(smCYVirtualScreen)
+			dx = absoluteMouseCoordinate(dx-originX, width)
+			dy = absoluteMouseCoordinate(dy-originY, height)
+		} else {
+			dx = absoluteMouseCoordinate(dx, b.api.getSystemMetrics(smCXScreen))
+			dy = absoluteMouseCoordinate(dy, b.api.getSystemMetrics(smCYScreen))
+		}
 	}
 
 	return injectedMouseInput{
@@ -515,34 +602,38 @@ func checkContext(ctx context.Context) error {
 	}
 }
 
-func lastWindowsError() error {
-	if err := windows.GetLastError(); err != nil {
-		return err
-	}
-	return windows.ERROR_GEN_FAILURE
-}
-
+// winAPI binds the Win32 calls used by makc through *windows.LazyProc. We
+// deliberately do NOT use purego.RegisterFunc here even though it would work:
+// purego routes through syscall.Syscall6 but does not preserve the connection
+// between the syscall and a follow-up GetLastError read on the same OS thread.
+// In practice that meant lastWindowsError() returned stale errno bytes from
+// other goroutines. *windows.LazyProc.Call returns the syscall.Errno directly
+// from the call site, sidestepping the TLS race entirely.
 type winAPI struct {
-	getAsyncKeyState    func(int32) int16
-	getCursorPos        func(*winPoint) int32
-	getSystemMetrics    func(int32) int32
-	sendInput           func(uint32, unsafe.Pointer, int32) uint32
-	injectMouseInput    func(*injectedMouseInput, int32) int32
-	injectKeyboardInput func(*keyboardInput, int32) int32
+	user32 *windows.LazyDLL
 
-	registerRawInputDevices func(*rawInputDevice, uint32, uint32) int32
-	getRawInputData         func(uintptr, uint32, unsafe.Pointer, *uint32, uint32) uint32
-	registerClassEx         func(*wndClassEx) uint16
-	createWindowEx          func(uint32, *uint16, *uint16, uint32, int32, int32, int32, int32, uintptr, uintptr, uintptr, uintptr) uintptr
-	defWindowProc           func(uintptr, uint32, uintptr, uintptr) uintptr
-	destroyWindow           func(uintptr) int32
-	unregisterClass         func(*uint16, uintptr) int32
+	procGetAsyncKeyState        *windows.LazyProc
+	procGetCursorPos            *windows.LazyProc
+	procGetSystemMetrics        *windows.LazyProc
+	procSendInput               *windows.LazyProc
+	procInjectMouseInput        *windows.LazyProc // optional
+	procInjectKeyboardInput     *windows.LazyProc // optional
+	procRegisterRawInputDevices *windows.LazyProc
+	procGetRawInputData         *windows.LazyProc
+	procRegisterClassEx         *windows.LazyProc
+	procCreateWindowEx          *windows.LazyProc
+	procDefWindowProc           *windows.LazyProc
+	procDestroyWindow           *windows.LazyProc
+	procUnregisterClass         *windows.LazyProc
+	procSetWindowsHookEx        *windows.LazyProc
+	procCallNextHookEx          *windows.LazyProc
+	procUnhookWindowsHookEx     *windows.LazyProc
+	procGetMessage              *windows.LazyProc
+	procPostThreadMessage       *windows.LazyProc
+	procSystemParametersInfo    *windows.LazyProc
 
-	setWindowsHookEx    func(int32, uintptr, uintptr, uint32) uintptr
-	callNextHookEx      func(uintptr, int32, uintptr, uintptr) uintptr
-	unhookWindowsHookEx func(uintptr) int32
-	getMessage          func(*winMsg, uintptr, uint32, uint32) int32
-	postThreadMessage   func(uint32, uint32, uintptr, uintptr) int32
+	hasInjectMouseInput    bool
+	hasInjectKeyboardInput bool
 }
 
 func newWinAPI() (*winAPI, error) {
@@ -551,78 +642,209 @@ func newWinAPI() (*winAPI, error) {
 		return nil, fmt.Errorf("makc: load user32.dll: %w", err)
 	}
 
-	api := &winAPI{}
-	handle := windows.Handle(user32.Handle())
+	api := &winAPI{user32: user32}
 
-	if err := registerProc(handle, &api.getAsyncKeyState, "GetAsyncKeyState"); err != nil {
-		return nil, err
+	required := []struct {
+		dst  **windows.LazyProc
+		name string
+	}{
+		{&api.procGetAsyncKeyState, "GetAsyncKeyState"},
+		{&api.procGetCursorPos, "GetCursorPos"},
+		{&api.procGetSystemMetrics, "GetSystemMetrics"},
+		{&api.procSendInput, "SendInput"},
+		{&api.procRegisterRawInputDevices, "RegisterRawInputDevices"},
+		{&api.procGetRawInputData, "GetRawInputData"},
+		{&api.procRegisterClassEx, "RegisterClassExW"},
+		{&api.procCreateWindowEx, "CreateWindowExW"},
+		{&api.procDefWindowProc, "DefWindowProcW"},
+		{&api.procDestroyWindow, "DestroyWindow"},
+		{&api.procUnregisterClass, "UnregisterClassW"},
+		{&api.procSetWindowsHookEx, "SetWindowsHookExW"},
+		{&api.procCallNextHookEx, "CallNextHookEx"},
+		{&api.procUnhookWindowsHookEx, "UnhookWindowsHookEx"},
+		{&api.procGetMessage, "GetMessageW"},
+		{&api.procPostThreadMessage, "PostThreadMessageW"},
+		{&api.procSystemParametersInfo, "SystemParametersInfoW"},
 	}
-	if err := registerProc(handle, &api.getCursorPos, "GetCursorPos"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.getSystemMetrics, "GetSystemMetrics"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.sendInput, "SendInput"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.registerRawInputDevices, "RegisterRawInputDevices"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.getRawInputData, "GetRawInputData"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.registerClassEx, "RegisterClassExW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.createWindowEx, "CreateWindowExW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.defWindowProc, "DefWindowProcW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.destroyWindow, "DestroyWindow"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.unregisterClass, "UnregisterClassW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.setWindowsHookEx, "SetWindowsHookExW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.callNextHookEx, "CallNextHookEx"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.unhookWindowsHookEx, "UnhookWindowsHookEx"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.getMessage, "GetMessageW"); err != nil {
-		return nil, err
-	}
-	if err := registerProc(handle, &api.postThreadMessage, "PostThreadMessageW"); err != nil {
-		return nil, err
+	for _, p := range required {
+		proc := user32.NewProc(p.name)
+		if err := proc.Find(); err != nil {
+			return nil, fmt.Errorf("makc: resolve user32!%s: %w", p.name, err)
+		}
+		*p.dst = proc
 	}
 
-	_ = registerOptionalProc(handle, &api.injectMouseInput, "InjectMouseInput")
-	_ = registerOptionalProc(handle, &api.injectKeyboardInput, "InjectKeyboardInput")
+	// Optional symbols: present on some Windows builds. Find() failure
+	// is recorded as "not available" rather than an init error.
+	api.procInjectMouseInput = user32.NewProc("InjectMouseInput")
+	if err := api.procInjectMouseInput.Find(); err == nil {
+		api.hasInjectMouseInput = true
+	} else {
+		api.procInjectMouseInput = nil
+	}
+	api.procInjectKeyboardInput = user32.NewProc("InjectKeyboardInput")
+	if err := api.procInjectKeyboardInput.Find(); err == nil {
+		api.hasInjectKeyboardInput = true
+	} else {
+		api.procInjectKeyboardInput = nil
+	}
 	return api, nil
 }
 
-func registerProc(handle windows.Handle, fptr any, name string) error {
-	proc, err := windows.GetProcAddress(handle, name)
-	if err != nil {
-		return fmt.Errorf("makc: load user32!%s: %w", name, err)
+// errnoOrDefault returns err when it is a non-zero windows.Errno; otherwise
+// returns ERROR_GEN_FAILURE so callers always have something to wrap. proc.Call
+// always returns a non-nil error (windows.Errno), but Errno(0) means "no
+// error reported" which we treat as a generic failure when the call already
+// signalled a failure via its return value.
+func errnoOrDefault(err error) error {
+	if errno, ok := err.(windows.Errno); ok && errno != 0 {
+		return errno
 	}
-	purego.RegisterFunc(fptr, proc)
+	return windows.ERROR_GEN_FAILURE
+}
+
+func (a *winAPI) getAsyncKeyState(vk int32) int16 {
+	r, _, _ := a.procGetAsyncKeyState.Call(uintptr(vk))
+	return int16(r)
+}
+
+func (a *winAPI) getCursorPos(p *winPoint) error {
+	r, _, e := a.procGetCursorPos.Call(uintptr(unsafe.Pointer(p)))
+	if r == 0 {
+		return fmt.Errorf("makc: GetCursorPos failed: %w", errnoOrDefault(e))
+	}
 	return nil
 }
 
-func registerOptionalProc(handle windows.Handle, fptr any, name string) error {
-	proc, err := windows.GetProcAddress(handle, name)
-	if err != nil {
-		return err
+func (a *winAPI) getSystemMetrics(idx int32) int32 {
+	r, _, _ := a.procGetSystemMetrics.Call(uintptr(idx))
+	return int32(r)
+}
+
+func (a *winAPI) sendInput(n uint32, p unsafe.Pointer, size int32) (uint32, error) {
+	r, _, e := a.procSendInput.Call(uintptr(n), uintptr(p), uintptr(size))
+	sent := uint32(r)
+	if sent != n {
+		return sent, fmt.Errorf("makc: SendInput sent %d of %d inputs: %w", sent, n, errnoOrDefault(e))
 	}
-	purego.RegisterFunc(fptr, proc)
+	return sent, nil
+}
+
+func (a *winAPI) injectMouseInput(p *injectedMouseInput, n int32) error {
+	if a.procInjectMouseInput == nil {
+		return errors.New("makc: InjectMouseInput is not available on this Windows build")
+	}
+	r, _, e := a.procInjectMouseInput.Call(uintptr(unsafe.Pointer(p)), uintptr(n))
+	if r == 0 {
+		return fmt.Errorf("makc: InjectMouseInput failed: %w", errnoOrDefault(e))
+	}
+	return nil
+}
+
+func (a *winAPI) injectKeyboardInput(p *keyboardInput, n int32) error {
+	if a.procInjectKeyboardInput == nil {
+		return errors.New("makc: InjectKeyboardInput is not available on this Windows build")
+	}
+	r, _, e := a.procInjectKeyboardInput.Call(uintptr(unsafe.Pointer(p)), uintptr(n))
+	if r == 0 {
+		return fmt.Errorf("makc: InjectKeyboardInput failed: %w", errnoOrDefault(e))
+	}
+	return nil
+}
+
+func (a *winAPI) registerRawInputDevices(p *rawInputDevice, n uint32, size uint32) error {
+	r, _, e := a.procRegisterRawInputDevices.Call(uintptr(unsafe.Pointer(p)), uintptr(n), uintptr(size))
+	if r == 0 {
+		return fmt.Errorf("makc: RegisterRawInputDevices failed: %w", errnoOrDefault(e))
+	}
+	return nil
+}
+
+// getRawInputData returns the bytes copied (or written for a sizing query)
+// and a non-nil error only on failure. ^uint32(0) is the documented Win32
+// failure sentinel.
+func (a *winAPI) getRawInputData(handle uintptr, command uint32, data unsafe.Pointer, size *uint32, headerSize uint32) (uint32, error) {
+	r, _, e := a.procGetRawInputData.Call(handle, uintptr(command), uintptr(data), uintptr(unsafe.Pointer(size)), uintptr(headerSize))
+	got := uint32(r)
+	if got == ^uint32(0) {
+		return got, errnoOrDefault(e)
+	}
+	return got, nil
+}
+
+func (a *winAPI) registerClassEx(wc *wndClassEx) (uint16, error) {
+	r, _, e := a.procRegisterClassEx.Call(uintptr(unsafe.Pointer(wc)))
+	if r == 0 {
+		return 0, fmt.Errorf("makc: RegisterClassExW failed: %w", errnoOrDefault(e))
+	}
+	return uint16(r), nil
+}
+
+func (a *winAPI) createWindowEx(exStyle uint32, className, windowName *uint16, style uint32, x, y, w, h int32, parent, menu, instance, lpParam uintptr) (uintptr, error) {
+	r, _, e := a.procCreateWindowEx.Call(
+		uintptr(exStyle),
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(windowName)),
+		uintptr(style),
+		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
+		parent, menu, instance, lpParam,
+	)
+	if r == 0 {
+		return 0, fmt.Errorf("makc: CreateWindowExW failed: %w", errnoOrDefault(e))
+	}
+	return r, nil
+}
+
+func (a *winAPI) defWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	r, _, _ := a.procDefWindowProc.Call(hwnd, uintptr(msg), wParam, lParam)
+	return r
+}
+
+func (a *winAPI) destroyWindow(hwnd uintptr) {
+	_, _, _ = a.procDestroyWindow.Call(hwnd)
+}
+
+func (a *winAPI) unregisterClass(className *uint16, instance uintptr) {
+	_, _, _ = a.procUnregisterClass.Call(uintptr(unsafe.Pointer(className)), instance)
+}
+
+func (a *winAPI) setWindowsHookEx(idHook int32, lpfn uintptr, hMod uintptr, threadID uint32) (uintptr, error) {
+	r, _, e := a.procSetWindowsHookEx.Call(uintptr(idHook), lpfn, hMod, uintptr(threadID))
+	if r == 0 {
+		return 0, fmt.Errorf("makc: SetWindowsHookExW failed: %w", errnoOrDefault(e))
+	}
+	return r, nil
+}
+
+func (a *winAPI) callNextHookEx(hhk uintptr, nCode int32, wParam, lParam uintptr) uintptr {
+	r, _, _ := a.procCallNextHookEx.Call(hhk, uintptr(nCode), wParam, lParam)
+	return r
+}
+
+func (a *winAPI) unhookWindowsHookEx(hhk uintptr) {
+	_, _, _ = a.procUnhookWindowsHookEx.Call(hhk)
+}
+
+// getMessage returns >0 on a normal message, 0 on WM_QUIT, and a non-nil
+// error on the documented -1 failure code.
+func (a *winAPI) getMessage(msg *winMsg, hwnd uintptr, filterMin, filterMax uint32) (int32, error) {
+	r, _, e := a.procGetMessage.Call(uintptr(unsafe.Pointer(msg)), hwnd, uintptr(filterMin), uintptr(filterMax))
+	res := int32(r)
+	if res == -1 {
+		return res, fmt.Errorf("makc: GetMessageW failed: %w", errnoOrDefault(e))
+	}
+	return res, nil
+}
+
+func (a *winAPI) postThreadMessage(threadID uint32, msg uint32, wParam, lParam uintptr) {
+	_, _, _ = a.procPostThreadMessage.Call(uintptr(threadID), uintptr(msg), wParam, lParam)
+}
+
+func (a *winAPI) systemParametersInfo(action uint32, param uint32, pv unsafe.Pointer, winIni uint32) error {
+	r, _, e := a.procSystemParametersInfo.Call(uintptr(action), uintptr(param), uintptr(pv), uintptr(winIni))
+	if r == 0 {
+		return fmt.Errorf("makc: SystemParametersInfoW(0x%X) failed: %w", action, errnoOrDefault(e))
+	}
 	return nil
 }
 
@@ -666,7 +888,24 @@ type keyboardInput struct {
 	DwExtraInfo uintptr
 }
 
+// input mirrors the Win32 INPUT struct. The C type is a tagged union of
+// MOUSEINPUT, KEYBDINPUT, and HARDWAREINPUT; we model it with a single
+// Mi (MOUSEINPUT) field because it is the largest of the three on every
+// supported architecture, and rely on Go's struct alignment rules to
+// match Win32's layout (offset 4 on x86, offset 8 on x64). Non-MOUSEINPUT
+// payloads are written into the same memory via unsafe.Pointer.
+//
+// The compile-time assertions below reject any future regression where a
+// payload grows past Mi's footprint and would corrupt the INPUT layout.
 type input struct {
 	Type uint32
 	Mi   mouseInput
 }
+
+// Static asserts: every payload must fit in mouseInput. If sizeof exceeds,
+// the array length goes negative and the build fails. unsafe.Sizeof is a
+// constant expression, so this costs nothing at runtime.
+var (
+	_ [unsafe.Sizeof(mouseInput{}) - unsafe.Sizeof(keyboardInput{})]byte
+	_ [unsafe.Sizeof(mouseInput{}) - unsafe.Sizeof(injectedMouseInput{})]byte
+)

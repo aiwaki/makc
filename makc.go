@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -41,6 +42,11 @@ const (
 
 	// MouseInjectionUInput uses the Linux uinput kernel interface.
 	MouseInjectionUInput
+
+	// MouseInjectionXDGPortal uses the XDG desktop portal RemoteDesktop
+	// interface for Wayland sessions. Requires the user to approve a
+	// permission dialog the first time Open is called with this backend.
+	MouseInjectionXDGPortal
 )
 
 func (b MouseInjectionBackend) String() string {
@@ -55,6 +61,8 @@ func (b MouseInjectionBackend) String() string {
 		return "cgevent"
 	case MouseInjectionUInput:
 		return "uinput"
+	case MouseInjectionXDGPortal:
+		return "xdgportal"
 	default:
 		return "unknown"
 	}
@@ -83,6 +91,10 @@ const (
 
 	// KeyboardInjectionUInput uses the Linux uinput kernel interface.
 	KeyboardInjectionUInput
+
+	// KeyboardInjectionXDGPortal uses the XDG desktop portal RemoteDesktop
+	// interface for Wayland sessions.
+	KeyboardInjectionXDGPortal
 )
 
 func (b KeyboardInjectionBackend) String() string {
@@ -97,6 +109,8 @@ func (b KeyboardInjectionBackend) String() string {
 		return "cgevent"
 	case KeyboardInjectionUInput:
 		return "uinput"
+	case KeyboardInjectionXDGPortal:
+		return "xdgportal"
 	default:
 		return "unknown"
 	}
@@ -106,23 +120,60 @@ type config struct {
 	mouseInjection    MouseInjectionBackend
 	keyboardInjection KeyboardInjectionBackend
 	inputTag          uintptr
+	mouseMotionFlags  MouseMotionFlag
 }
+
+// MouseMotionFlag is a bitset of platform-specific mouse motion tuning hints.
+// Hints unsupported by the current backend are ignored — passing them on a
+// platform that does not implement them is not an error.
+type MouseMotionFlag uint8
+
+const (
+	// MouseMotionNoCoalesce disables operating-system coalescing of rapid
+	// mouse move events. Maps to Win32 MOUSEEVENTF_MOVE_NOCOALESCE; ignored
+	// on macOS and Linux. Use when each move event matters at high
+	// frequencies, e.g. gesture capture or sub-pixel automation.
+	MouseMotionNoCoalesce MouseMotionFlag = 1 << iota
+
+	// MouseMotionVirtualDesk treats absolute mouse coordinates as positions
+	// on the entire multi-monitor virtual desktop instead of the primary
+	// screen. Maps to Win32 MOUSEEVENTF_VIRTUALDESK; ignored on macOS and
+	// Linux. The Windows backend uses SM_CXVIRTUALSCREEN /
+	// SM_CYVIRTUALSCREEN with SM_XVIRTUALSCREEN / SM_YVIRTUALSCREEN as the
+	// origin when this flag is set.
+	MouseMotionVirtualDesk
+)
 
 // Option configures a Client.
 type Option func(*config)
 
 // WithMouseInjection selects the backend used by Mouse movement and button
-// injection.
+// injection from the platform-agnostic enum. Use this when the backend is
+// chosen at runtime (e.g. a CLI flag or config value). For statically
+// platform-specific code prefer the typed per-OS constructors —
+// WithMouseSendInput, WithMouseCGEvent, WithMouseUInput, ... — which fail
+// to compile on a build that does not support the chosen backend.
 func WithMouseInjection(backend MouseInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.mouseInjection = backend
 	}
 }
 
-// WithKeyboardInjection selects the backend used by Keyboard injection.
+// WithKeyboardInjection is the keyboard counterpart of WithMouseInjection.
+// Same trade-off: runtime-flexible vs the typed per-OS WithKeyboardSendInput
+// / WithKeyboardCGEvent / WithKeyboardUInput.
 func WithKeyboardInjection(backend KeyboardInjectionBackend) Option {
 	return func(cfg *config) {
 		cfg.keyboardInjection = backend
+	}
+}
+
+// WithMouseMotion enables additional mouse motion tuning hints. Pass an OR
+// of MouseMotionFlag values. Hints not supported by the current backend are
+// silently ignored.
+func WithMouseMotion(flags MouseMotionFlag) Option {
+	return func(cfg *config) {
+		cfg.mouseMotionFlags |= flags
 	}
 }
 
@@ -142,8 +193,10 @@ type Client struct {
 	Mouse    *Mouse
 	Keyboard *Keyboard
 
-	backend systemBackend
-	closed  bool
+	backend   systemBackend
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open initializes a makc client.
@@ -182,20 +235,23 @@ func (c *Client) InputTag() uintptr {
 	return c.backend.InputTag()
 }
 
-// Close releases backend resources. It is safe to call Close more than once.
+// Close releases backend resources. It is safe to call Close more than once
+// and from multiple goroutines; the underlying backend Close runs exactly once.
 func (c *Client) Close() error {
-	if c == nil || c.closed {
+	if c == nil {
 		return nil
 	}
-	c.closed = true
-	if c.backend == nil {
-		return nil
-	}
-	return c.backend.Close()
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		if c.backend != nil {
+			c.closeErr = c.backend.Close()
+		}
+	})
+	return c.closeErr
 }
 
 func (c *Client) ensureReady(ctx context.Context) error {
-	if c == nil || c.backend == nil || c.closed {
+	if c == nil || c.backend == nil || c.closed.Load() {
 		return ErrClosed
 	}
 	if ctx == nil {

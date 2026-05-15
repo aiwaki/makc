@@ -38,23 +38,40 @@ type linuxEvdevDevice struct {
 	hwheel int32
 }
 
-func linuxEvdevKeyState(ctx context.Context, code uint16) (State, error) {
+// evdevKeyState answers a key/button state query using a cached set of
+// evdev fds. The cache is opened lazily on first call and reused; on a
+// per-device disconnect (ENODEV / ENXIO) the entry is dropped from the
+// cache and not retried until backend re-init. Listener paths still open
+// their own short-lived fd set — the cache here is exclusively for the
+// state-poll path.
+func (b *linuxBackend) evdevKeyState(ctx context.Context, code uint16) (State, error) {
 	if err := checkContext(ctx); err != nil {
 		return Up, err
 	}
-	devices, err := openLinuxEvdevDevices(ListenAll)
-	if err != nil {
-		return Up, err
-	}
-	defer closeLinuxEvdevDevices(devices)
 
-	for _, device := range devices {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+
+	if !b.stateLoaded {
+		devices, err := openLinuxEvdevDevices(ListenAll)
+		if err != nil {
+			return Up, err
+		}
+		b.stateDevices = devices
+		b.stateLoaded = true
+	}
+
+	for i := 0; i < len(b.stateDevices); {
 		if err := checkContext(ctx); err != nil {
 			return Up, err
 		}
+		device := b.stateDevices[i]
 		down, err := linuxEvdevKeyDown(device.fd, code)
 		if err != nil {
 			if errors.Is(err, unix.ENODEV) || errors.Is(err, unix.ENXIO) {
+				_ = unix.Close(device.fd)
+				device.fd = -1
+				b.stateDevices = append(b.stateDevices[:i], b.stateDevices[i+1:]...)
 				continue
 			}
 			return Up, fmt.Errorf("makc: EVIOCGKEY(%s): %w", device.path, err)
@@ -62,6 +79,7 @@ func linuxEvdevKeyState(ctx context.Context, code uint16) (State, error) {
 		if down {
 			return Down, nil
 		}
+		i++
 	}
 	return Up, nil
 }
@@ -76,13 +94,10 @@ func linuxListenEvdev(ctx context.Context, opts ListenOptions) (*Listener, error
 
 	events := make(chan InputEvent, opts.Buffer)
 	done := make(chan error, 1)
-	go runLinuxEvdevListener(ctx, opts, devices, events, done)
+	stats := newListenerStats()
+	go runLinuxEvdevListener(ctx, opts, stats, devices, events, done)
 
-	return &Listener{
-		Events: events,
-		done:   done,
-		cancel: cancel,
-	}, nil
+	return newListener(events, done, cancel, stats), nil
 }
 
 func openLinuxEvdevDevices(mask ListenMask) ([]*linuxEvdevDevice, error) {
@@ -176,7 +191,7 @@ func linuxEvdevKeyDown(fd int, code uint16) (bool, error) {
 	return bitSet(bits[:], code), nil
 }
 
-func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, devices []*linuxEvdevDevice, events chan<- InputEvent, done chan<- error) {
+func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, stats *listenerStats, devices []*linuxEvdevDevice, events chan<- InputEvent, done chan<- error) {
 	defer close(events)
 	defer closeLinuxEvdevDevices(devices)
 
@@ -223,17 +238,25 @@ func runLinuxEvdevListener(ctx context.Context, opts ListenOptions, devices []*l
 			if revents&unix.POLLIN == 0 {
 				continue
 			}
-			if err := readLinuxEvdevEvents(devices[i], opts, events); err != nil {
+			if err := readLinuxEvdevEvents(devices[i], opts, stats, events); err != nil {
 				done <- err
 				return
 			}
 		}
 	}
 
-	done <- nil
+	// Loop fell out because every device was pruned. Distinguish a
+	// graceful shutdown (ctx cancelled) from a silent disconnect — the
+	// latter previously returned nil and the caller had no way to tell
+	// the listener had died.
+	if ctx.Err() != nil {
+		done <- nil
+		return
+	}
+	done <- errors.New("makc: every evdev device disconnected; reopen the client to recover")
 }
 
-func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, out chan<- InputEvent) error {
+func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) error {
 	for {
 		event, err := readLinuxInputEvent(device.fd)
 		if err != nil {
@@ -245,7 +268,7 @@ func readLinuxEvdevEvents(device *linuxEvdevDevice, opts ListenOptions, out chan
 			}
 			return fmt.Errorf("makc: read Linux evdev device %s: %w", device.path, err)
 		}
-		linuxEvdevEvent(device, event, opts, out)
+		linuxEvdevEvent(device, event, opts, stats, out)
 	}
 }
 
@@ -266,11 +289,11 @@ func readLinuxInputEvent(fd int) (linuxInputEvent, error) {
 	return event, nil
 }
 
-func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOptions, out chan<- InputEvent) {
+func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) {
 	switch ev.Type {
 	case linuxEvSyn:
 		if ev.Code == linuxSynReport {
-			linuxEvdevFlushRel(device, ev.Time, opts, out)
+			linuxEvdevFlushRel(device, ev.Time, opts, stats, out)
 		}
 	case linuxEvRel:
 		if opts.Mask&ListenMouse == 0 {
@@ -295,7 +318,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 			if opts.Mask&ListenMouse == 0 {
 				return
 			}
-			linuxEvdevEmit(opts, out, InputEvent{
+			linuxEvdevEmit(opts, stats, out, InputEvent{
 				Kind:   InputEventMouseButton,
 				Time:   linuxEventTime(ev.Time),
 				Raw:    true,
@@ -311,7 +334,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 		if !ok || opts.Mask&ListenKeyboard == 0 {
 			return
 		}
-		linuxEvdevEmit(opts, out, InputEvent{
+		linuxEvdevEmit(opts, stats, out, InputEvent{
 			Kind:   InputEventKey,
 			Time:   linuxEventTime(ev.Time),
 			Raw:    true,
@@ -325,7 +348,7 @@ func linuxEvdevEvent(device *linuxEvdevDevice, ev linuxInputEvent, opts ListenOp
 	}
 }
 
-func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts ListenOptions, out chan<- InputEvent) {
+func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts ListenOptions, stats *listenerStats, out chan<- InputEvent) {
 	if opts.Mask&ListenMouse == 0 {
 		device.relX = 0
 		device.relY = 0
@@ -342,19 +365,19 @@ func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts L
 		event := base
 		event.Kind = InputEventMouseMove
 		event.Mouse.Move = Rel(int(device.relX), int(device.relY))
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	if device.wheel != 0 {
 		event := base
 		event.Kind = InputEventMouseWheel
 		event.Mouse.Delta = int(device.wheel) * WheelDelta
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	if device.hwheel != 0 {
 		event := base
 		event.Kind = InputEventMouseHWheel
 		event.Mouse.Delta = int(device.hwheel) * WheelDelta
-		linuxEvdevEmit(opts, out, event)
+		linuxEvdevEmit(opts, stats, out, event)
 	}
 	device.relX = 0
 	device.relY = 0
@@ -362,13 +385,15 @@ func linuxEvdevFlushRel(device *linuxEvdevDevice, eventTime unix.Timeval, opts L
 	device.hwheel = 0
 }
 
-func linuxEvdevEmit(opts ListenOptions, out chan<- InputEvent, event InputEvent) {
+func linuxEvdevEmit(opts ListenOptions, stats *listenerStats, out chan<- InputEvent, event InputEvent) {
 	if !prepareInputEvent(&event, opts) {
 		return
 	}
 	select {
 	case out <- event:
+		stats.delivered.Add(1)
 	default:
+		stats.dropped.Add(1)
 	}
 }
 

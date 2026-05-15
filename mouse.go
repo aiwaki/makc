@@ -34,6 +34,17 @@ func (m *Mouse) ScreenSize(ctx context.Context) (Point, error) {
 	return m.client.backend.ScreenSize(ctx)
 }
 
+// SystemSpeed returns the operating system's configured mouse speed setting.
+// On Windows this maps to SystemParametersInfo(SPI_GETMOUSESPEED) and ranges
+// from 1 to 20 with 10 being the default. macOS and Linux return
+// ErrUnsupported.
+func (m *Mouse) SystemSpeed(ctx context.Context) (int, error) {
+	if err := m.ensureReady(ctx); err != nil {
+		return 0, err
+	}
+	return m.client.backend.MouseSystemSpeed(ctx)
+}
+
 // State returns the current state of a mouse button.
 func (m *Mouse) State(ctx context.Context, button MouseButton) (State, error) {
 	if err := m.ensureReady(ctx); err != nil {
